@@ -1,0 +1,64 @@
+{
+  "name": "aurum",
+  "version": "1.0.0",
+  "description": "AURUM - Jewellery Metal Tracking & Control System",
+  "author": "Brasilgo Jewels Private Limited",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:vite": "vite build",
+    "build:win": "electron-builder --win"
+  },
+  "dependencies": {
+    "app-builder-bin": "^4.2.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "node-cron": "^3.0.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "electron": "^29.1.0",
+    "electron-builder": "^24.9.1",
+    "vite": "^5.1.4"
+  },
+  "build": {
+    "appId": "com.brasilgojewels.aurum",
+    "productName": "AURUM",
+    "copyright": "Copyright 2025 Brasilgo Jewels Private Limited",
+    "directories": {
+      "output": "release"
+    },
+    "extraFiles": [
+      {
+        "from": "node_modules/electron/dist/ffmpeg.dll",
+        "to": "ffmpeg.dll"
+      }
+    ],
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "preload.js",
+      "auth.js",
+      "backup.js",
+      "server.js",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/.cache/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/aurum_icon.ico",
+      "compression": "store"
+    }
+  }
+}
