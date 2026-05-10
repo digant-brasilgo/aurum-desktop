@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('aurum', {
     deleteUser:     (id)            => ipcRenderer.invoke('auth:deleteUser', id),
     changePassword: (uid, old, nw)  => ipcRenderer.invoke('auth:changePassword', uid, old, nw),
     verifyPassword: (uid, pwd)      => ipcRenderer.invoke('auth:verifyPassword', uid, pwd),
+    adminResetPassword: (uid, nw)   => ipcRenderer.invoke('auth:adminResetPassword', uid, nw),
   },
   file: {
     exportJSON:        ()     => ipcRenderer.invoke('file:exportJSON'),

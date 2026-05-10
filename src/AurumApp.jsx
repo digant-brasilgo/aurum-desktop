@@ -37,7 +37,14 @@ export default function AurumApp() {
   const [company, setCompany] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [openTabs, setOpenTabs] = useState(['dashboard']);
+  const [theme, setTheme] = useState(() => localStorage.getItem('aurum_theme') || 'dark');
   const { db, updateDB, saveNow, reloadDB, loading, lastSaved } = useAurumData();
+
+  const toggleTheme = () => setTheme(t => {
+    const next = t === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('aurum_theme', next);
+    return next;
+  });
 
   const openTab = (id) => {
     setOpenTabs(prev => prev.includes(id) ? prev : [...prev, id]);
@@ -92,13 +99,22 @@ export default function AurumApp() {
   }
 
   return (
-    <div style={{ height:'100vh', display:'flex', flexDirection:'column', background:'#0a0a0f', overflow:'hidden' }}>
-      <LiveTicker user={user} onLogout={handleLogout} lastSaved={lastSaved} db={db} onNavigate={openTab} />
+    <div className={`theme-${theme}`} style={{ height:'100vh', display:'flex', flexDirection:'column', background:'#0a0a0f', overflow:'hidden' }}>
+      <LiveTicker user={user} company={company} onLogout={handleLogout} lastSaved={lastSaved} db={db} onNavigate={openTab} theme={theme} toggleTheme={toggleTheme} />
       <div style={{ flex:1, overflow:'hidden', display:'flex', flexDirection:'column' }}>
         <ErrorBoundary>
-          <MainApp db={db} updateDB={updateDB} user={user} company={company} onLogout={handleLogout} can={can} activeTab={activeTab} setActiveTab={setActiveTab} openTabs={openTabs} setOpenTabs={setOpenTabs} openTab={openTab} />
+          <MainApp db={db} updateDB={updateDB} user={user} company={company} onLogout={handleLogout} can={can} activeTab={activeTab} setActiveTab={setActiveTab} openTabs={openTabs} setOpenTabs={setOpenTabs} openTab={openTab} theme={theme} toggleTheme={toggleTheme} />
         </ErrorBoundary>
       </div>
+      {/* Busy overlay — shown on initial load */}
+      {loading && (
+        <div className="aurum-busy-overlay">
+          <div style={{ position:"relative", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <div className="aurum-busy-ring" />
+            <div className="aurum-busy-diamond" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

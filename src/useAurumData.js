@@ -165,14 +165,25 @@ export function useAurumData() {
   }, []);
 
   const updateDB = useCallback((updater) => {
-    setDb(prev => {
-      const next   = JSON.parse(JSON.stringify(prev));
-      const result = updater(next);
-      const final  = result !== undefined ? result : next;
-      dbRef.current = final;
-      scheduleSave(final);
-      return final;
-    });
+    // Show busy cursor during processing
+    document.body.style.cursor = "progress";
+    try {
+      setDb(prev => {
+        const next   = JSON.parse(JSON.stringify(prev));
+        const result = updater(next);
+        const final  = result !== undefined ? result : next;
+        dbRef.current = final;
+        scheduleSave(final);
+        return final;
+      });
+    } finally {
+      // Restore cursor after React processes the state update
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          document.body.style.cursor = "";
+        });
+      });
+    }
   }, [scheduleSave]);
 
   const saveNow = useCallback(async () => {

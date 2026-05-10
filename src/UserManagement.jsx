@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 
 const ROLES = {
   admin: { label:'Administrator',      color:'#c8a850' },
@@ -17,6 +17,8 @@ async function api(method, path, body) {
       return window.aurum.auth.updateUser(path.split('/')[2], body);
     if (path === '/change-password' && method === 'POST')
       return window.aurum.auth.changePassword(body.userId, body.oldPassword, body.newPassword);
+    if (path === '/admin-reset-password' && method === 'POST')
+      return window.aurum.auth.adminResetPassword(body.userId, body.newPassword);
   } else {
     const token = sessionStorage.getItem('aurum_token');
     const url   = `${window.__AURUM_SERVER_URL}/api${path}`;
@@ -88,6 +90,17 @@ export default function UserManagement({ currentUser }) {
       flash(`✓ User ${user.isActive ? 'deactivated' : 'activated'}`);
       loadUsers();
     } else flash(r?.error || 'Failed', true);
+  }
+
+  const [resetId, setResetId] = useState(null);
+  const [resetPw, setResetPw] = useState('');
+
+  async function handleAdminResetPw() {
+    if (!resetPw || resetPw.length < 6) return flash('Password must be at least 6 characters', true);
+    const r = await api('POST', '/admin-reset-password', { userId: resetId, newPassword: resetPw });
+    if (r?.ok || r?.success) {
+      flash('✓ Password reset successfully'); setResetId(null); setResetPw('');
+    } else flash(r?.error || 'Failed to reset password', true);
   }
 
   async function handleSaveEdit() {
@@ -240,7 +253,8 @@ export default function UserManagement({ currentUser }) {
             </thead>
             <tbody>
               {users.map(u=>(
-                <tr key={u.id} style={{ borderBottom:'1px solid #0f0f18', opacity:u.isActive?1:0.45 }}>
+                <React.Fragment key={u.id}>
+                <tr style={{ borderBottom:'1px solid #0f0f18', opacity:u.isActive?1:0.45 }}>
                   <td style={{ padding:'10px 12px' }}>
                     {editId===u.id
                       ? <input style={{...input,width:'140px'}} value={editData.displayName??u.displayName}
@@ -272,11 +286,15 @@ export default function UserManagement({ currentUser }) {
                         <button style={btn('gold')} onClick={handleSaveEdit}>Save</button>
                         <button style={btn()} onClick={()=>{setEditId(null);setEditData({});}}>Cancel</button>
                       </>) : (<>
-                        {/* Admin can edit anyone including themselves and other admins */}
-                        {/* Others can only edit non-admin/co users and not themselves */}
                         {(currentUser.role==='admin' || (u.id !== currentUser.id && !['admin','co'].includes(u.role))) && (
-                          <button style={btn()} onClick={()=>{setEditId(u.id);setEditData({});}}>
+                          <button style={btn()} onClick={()=>{setEditId(u.id);setEditData({});setResetId(null);}}>
                             {u.id===currentUser.id ? 'Edit My Name' : 'Edit'}
+                          </button>
+                        )}
+                        {currentUser.role==='admin' && u.id !== currentUser.id && (
+                          <button style={{...btn(), color:'#c8a850', borderColor:'#4a3810'}}
+                            onClick={()=>{setResetId(resetId===u.id?null:u.id);setResetPw('');setEditId(null);}}>
+                            🔑 Reset Pw
                           </button>
                         )}
                         {u.id !== currentUser.id && (currentUser.role==='admin' || !['admin','co'].includes(u.role)) && (
@@ -288,6 +306,21 @@ export default function UserManagement({ currentUser }) {
                     </div>
                   </td>
                 </tr>
+                {resetId===u.id && (
+                  <tr style={{ background:'#0d0d18', borderBottom:'1px solid #1a1a2e' }}>
+                    <td colSpan={6} style={{ padding:'12px 16px' }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+                        <span style={{ fontSize:'11px', color:'#c8a850', letterSpacing:'1px' }}>🔑 RESET PASSWORD FOR {u.displayName}:</span>
+                        <input style={{...input, width:'200px'}} type="password" placeholder="New password (min 6 chars)"
+                          value={resetPw} onChange={e=>setResetPw(e.target.value)}
+                          onKeyDown={e=>e.key==='Enter'&&handleAdminResetPw()} autoFocus />
+                        <button style={btn('gold')} onMouseDown={e=>{e.preventDefault(); handleAdminResetPw();}}>✓ Set Password</button>
+                        <button style={btn()} onClick={()=>{setResetId(null);setResetPw('');}}>Cancel</button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>

@@ -3,6 +3,10 @@ const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
 
+// Performance: prevent background throttling
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+
 let mainWindow, tray;
 const userDataPath  = app.getPath('userData');
 const usersFile     = path.join(userDataPath, 'aurum-users.json');
@@ -148,7 +152,9 @@ function startLanServer() {
     }
 
     appExpress.get('/api/status', (req, res) => {
-      res.json({ ok: true, server: 'AURUM', version: '1.0.0', time: new Date().toISOString() });
+      const co = readCompanies().find(c=>c.id===activeCompanyId) || readCompanies()[0] || {};
+      res.json({ ok: true, server: 'AURUM', version: '1.0.0', time: new Date().toISOString(),
+        company: { id: co.id, name: co.name, shortName: co.shortName, logo: co.logo||null, copyright: co.copyright||'' } });
     });
 
     appExpress.post('/api/login', (req, res) => {
@@ -182,10 +188,30 @@ function startLanServer() {
     });
 
     appExpress.post('/api/data', authMiddleware, (req, res) => {
-      writeData(req.body);
-      lastChange = Date.now();
-      if (mainWindow) mainWindow.webContents.send('db:reload');
-      res.json({ ok: true });
+      try {
+        const incoming = req.body;
+        const current  = readData();
+        // Safety check — never overwrite with significantly smaller data
+        const currentBags  = (current.bags  || []).length;
+        const incomingBags = (incoming.bags || []).length;
+        const currentSize  = JSON.stringify(current).length;
+        const incomingSize = JSON.stringify(incoming).length;
+        // Block if incoming has far fewer bags OR is much smaller (possible empty DB)
+        if (currentBags > 5 && incomingBags === 0) {
+          console.error(`[SAFETY] Blocked empty DB write — current has ${currentBags} bags`);
+          return res.status(400).json({ error: 'Safety check failed: incoming data appears empty' });
+        }
+        if (currentBags > 10 && incomingBags < currentBags * 0.5) {
+          console.error(`[SAFETY] Blocked suspicious write — current: ${currentBags} bags, incoming: ${incomingBags} bags`);
+          return res.status(400).json({ error: 'Safety check failed: incoming data has significantly fewer bags' });
+        }
+        writeData(incoming);
+        lastChange = Date.now();
+        if (mainWindow) mainWindow.webContents.send('db:reload');
+        res.json({ ok: true });
+      } catch(e) {
+        res.status(500).json({ error: e.message });
+      }
     });
 
     // Targeted receipt update — used by Aurum Business to mark a receipt as billed
@@ -229,6 +255,22 @@ function startLanServer() {
       }
       writeUsers(users);
       res.json({ ok: true });
+    });
+
+    // Admin reset password — no old password required, admin only
+    appExpress.post('/api/admin-reset-password', authMiddleware, (req, res) => {
+      try {
+        const reqUser = readUsers().find(u => u.id === req.user?.id);
+        if (!reqUser || reqUser.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+        const { userId, newPassword } = req.body;
+        if (!userId || !newPassword || newPassword.length < 6) return res.status(400).json({ error: 'Invalid request' });
+        const users = readUsers();
+        const idx = users.findIndex(u => u.id === userId);
+        if (idx === -1) return res.status(404).json({ error: 'User not found' });
+        users[idx].password = Auth.hashPassword(newPassword);
+        writeUsers(users);
+        res.json({ ok: true });
+      } catch(err) { res.status(500).json({ error: err.message }); }
     });
 
     appExpress.get('*', (req, res) => {
@@ -762,19 +804,15 @@ ipcMain.handle('backup:fromFlashDrive', async () => {
   }
 });
 
-// ── Auto-backup at 10pm
+// ── Auto-backup every hour + at 10pm
 function scheduleBackup() {
-  function msUntil10pm() {
-    const now  = new Date();
-    const next = new Date();
-    next.setHours(22,0,0,0);
-    if (next <= now) next.setDate(next.getDate()+1);
-    return next - now;
-  }
-  setTimeout(() => {
+  // Backup every hour
+  setInterval(() => {
     doBackup();
-    setInterval(doBackup, 24*60*60*1000);
-  }, msUntil10pm());
+    console.log('[BACKUP] Hourly backup completed at', new Date().toLocaleTimeString());
+  }, 60 * 60 * 1000); // every 60 minutes
+  // Also do immediate backup on start
+  setTimeout(() => doBackup(), 5 * 60 * 1000); // 5 minutes after start
 }
 
 // ── IPC handlers ──────────────────────────────────────────────
@@ -855,6 +893,21 @@ ipcMain.handle('auth:changePassword', (e, userId, oldPass, newPass) => {
   user.password = Auth.hashPassword(newPass);
   writeUsers(users);
   return { success:true };
+});
+
+// Admin reset password — no old password required
+ipcMain.handle('auth:adminResetPassword', (e, userId, newPass) => {
+  try {
+    const users = readUsers();
+    const user  = users.find(u=>u.id===userId);
+    if (!user) return { success:false, error:'User not found' };
+    if (!newPass || newPass.length < 6) return { success:false, error:'Password too short (min 6 chars)' };
+    user.password = Auth.hashPassword(newPass);
+    writeUsers(users);
+    return { success:true };
+  } catch(err) {
+    return { success:false, error:err.message };
+  }
 });
 
 // Verify password without changing it (used for delete confirmations)
