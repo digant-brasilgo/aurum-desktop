@@ -181,27 +181,6 @@ function getItemPrefix(categoryLabel) {
   return ITEM_PREFIXES[categoryLabel] || categoryLabel.substring(0,2).toUpperCase();
 }
 
-function isRepairItem(itemId) {
-  return (itemId||"").includes("-Rep");
-}
-
-function generateItemId(categoryLabel, itemCounters) {
-  const prefix = getItemPrefix(categoryLabel);
-  const current = itemCounters[prefix] || 0;
-  const next = current + 1;
-  return { itemId: prefix + next, prefix, next };
-}
-
-function generateDesignNo(category, designs, db) {
-  // Look up prefix: first from db.categories, then DESIGN_PREFIXES, then derive from name
-  const dbCat = (db?.categories||[]).find(c=>c.label===category||c.code===category);
-  const prefix = dbCat?.prefix || DESIGN_PREFIXES[category] || category.replace(/[^A-Za-z]/g,"").toUpperCase().slice(0,3);
-  const existing = (designs||[])
-    .map(d=>{ const m=d.id?.match(new RegExp("^"+prefix+"(\\d+)$","i")); return m?parseInt(m[1]):0; })
-    .filter(n=>n>0);
-  return prefix + (existing.length>0 ? Math.max(...existing)+1 : 1);
-}
-
 const DEFAULT_DEPARTMENTS = [
   { name:"Sprue Grinding",    order:1, isAdditionalJob:false },
   { name:"Filing",            order:2, isAdditionalJob:false },
@@ -371,31 +350,6 @@ function migrateDB(db) {
 // MAIN APP
 // ============================================================
 const STORAGE_KEY = "aurum_db_v1";
-
-function loadFromStorage() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      // Merge with initDB to ensure new fields exist if schema updated
-      const fresh = initDB();
-      const merged = { ...fresh, ...parsed };
-      // Run schema migration
-      return migrateDB(merged);
-    }
-  } catch(e) {
-    console.warn("Could not load from localStorage:", e);
-  }
-  return initDB();
-}
-
-function saveToStorage(db) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-  } catch(e) {
-    console.warn("Could not save to localStorage:", e);
-  }
-}
 
 export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTab, openTabs, setOpenTabs, openTab, company, onLogout, theme, toggleTheme }) {
   const [navToBagId, setNavToBagId] = React.useState("");
@@ -18299,160 +18253,10 @@ function DesignLightbox({ design, designs, onClose }) {
 }
 
 // ── Design Gallery Tab ────────────────────────────────────────
-function DesignGalleryTab({ db }) {
-  const [lbIdx,  setLbIdx]  = React.useState(null);
-  const [filter, setFilter] = React.useState("All");
-  const [metal,  setMetal]  = React.useState("All");
-  const [search, setSearch] = React.useState("");
-  const [view,   setView]   = React.useState("grid");
-
-  const designs    = db.designs || [];
-  const categories = ["All",...Array.from(new Set(designs.map(d=>d.category).filter(Boolean)))];
-
-  const filtered = designs.filter(d=>{
-    if(filter!=="All" && d.category!==filter) return false;
-    if(metal!=="All"  && d.metalType!==metal)  return false;
-    if(search && !d.name?.toLowerCase().includes(search.toLowerCase()) && !d.id?.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
-
-  return (
-    <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"20px",flexWrap:"wrap",gap:"12px"}}>
-        <div>
-          <div style={{fontSize:"11px",letterSpacing:"3px",color:"var(--gold)",fontWeight:"800"}}>DESIGN REGISTER</div>
-          <div style={{fontSize:"10px",color:"var(--text-dim)",marginTop:"4px",letterSpacing:"1px"}}>
-            {filtered.length} of {designs.length} designs · {designs.filter(d=>d.photo).length} with photos
-          </div>
-        </div>
-        <div style={{display:"flex",gap:"6px"}}>
-          <button onClick={()=>setView("grid")} style={{padding:"5px 12px",fontSize:"10px",letterSpacing:"1px",background:view==="grid"?"var(--gold)":"var(--dark2)",color:view==="grid"?"#000":"var(--text-dim)",border:"1px solid var(--dark4)",borderRadius:"4px",cursor:"pointer"}}>⊞ GRID</button>
-          <button onClick={()=>setView("table")} style={{padding:"5px 12px",fontSize:"10px",letterSpacing:"1px",background:view==="table"?"var(--gold)":"var(--dark2)",color:view==="table"?"#000":"var(--text-dim)",border:"1px solid var(--dark4)",borderRadius:"4px",cursor:"pointer"}}>≡ TABLE</button>
-        </div>
-      </div>
-
-      <div style={{display:"flex",gap:"8px",marginBottom:"20px",flexWrap:"wrap",alignItems:"center"}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by ID or name…"
-          style={{background:"var(--dark2)",border:"1px solid var(--dark4)",color:"var(--text-primary)",borderRadius:"6px",padding:"6px 12px",fontSize:"11px",width:"180px",outline:"none"}} />
-        <div style={{display:"flex",gap:"4px"}}>
-          {["All","Gold","Silver"].map(m=>(
-            <button key={m} onClick={()=>setMetal(m)} style={{padding:"5px 12px",fontSize:"10px",background:metal===m?"var(--gold)":"var(--dark2)",color:metal===m?"#000":"var(--text-dim)",border:"1px solid var(--dark4)",borderRadius:"4px",cursor:"pointer"}}>{m}</button>
-          ))}
-        </div>
-        <div style={{display:"flex",gap:"4px",flexWrap:"wrap"}}>
-          {categories.map(cat=>(
-            <button key={cat} onClick={()=>setFilter(cat)} style={{padding:"5px 12px",fontSize:"10px",background:filter===cat?"var(--gold-dim)":"var(--dark2)",color:filter===cat?"var(--gold-light)":"var(--text-dim)",border:"1px solid var(--dark4)",borderRadius:"4px",cursor:"pointer"}}>{cat}</button>
-          ))}
-        </div>
-      </div>
-
-      {filtered.length===0 && (
-        <div style={{textAlign:"center",color:"var(--text-dim)",padding:"80px 0",fontSize:"11px",letterSpacing:"2px"}}>
-          {designs.length===0?"NO DESIGNS YET — ADD DESIGNS IN SETTINGS":"NO DESIGNS MATCH THIS FILTER"}
-        </div>
-      )}
-
-      {view==="grid" && filtered.length>0 && (
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:"14px"}}>
-          {filtered.map((d,i)=>(
-            <div key={d.id} onClick={()=>setLbIdx(i)}
-              style={{background:"var(--dark2)",border:"1px solid var(--dark4)",borderRadius:"8px",overflow:"hidden",cursor:"pointer",transition:"border-color 0.2s,transform 0.15s"}}
-              onMouseEnter={e=>{e.currentTarget.style.borderColor="var(--gold-dim)";e.currentTarget.style.transform="translateY(-2px)";}}
-              onMouseLeave={e=>{e.currentTarget.style.borderColor="var(--dark4)";e.currentTarget.style.transform="none";}}>
-              <div style={{width:"100%",aspectRatio:"1",background:"var(--dark3)",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
-                {d.photo
-                  ? <img src={d.photo} alt={d.id} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
-                  : <div style={{color:"var(--dark4)",fontSize:"10px",letterSpacing:"1.5px"}}>NO PHOTO</div>
-                }
-                <div style={{position:"absolute",top:"6px",right:"6px",background:"rgba(0,0,0,0.7)",borderRadius:"3px",padding:"1px 5px",fontSize:"9px",color:d.metalType==="Gold"?"var(--gold)":"#a0a0c8"}}>{d.metalType}</div>
-              </div>
-              <div style={{padding:"9px 11px"}}>
-                <div style={{color:"var(--gold)",fontSize:"11px",fontWeight:"700",letterSpacing:"0.5px"}}>{d.id}</div>
-                <div style={{color:"var(--text-primary)",fontSize:"11px",marginTop:"2px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.name}</div>
-                {d.cadNo && <div style={{color:"var(--text-dim)",fontSize:"10px",marginTop:"2px",fontFamily:"monospace"}}>{d.cadNo}</div>}
-                <div style={{display:"flex",gap:"4px",marginTop:"5px",flexWrap:"wrap"}}>
-                  <span style={{fontSize:"9px",padding:"1px 5px",background:"var(--dark3)",color:"var(--text-dim)",borderRadius:"3px"}}>{d.purity}</span>
-                  <span style={{fontSize:"9px",padding:"1px 5px",background:"var(--dark3)",color:"var(--text-dim)",borderRadius:"3px"}}>{d.category}</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {view==="table" && filtered.length>0 && (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th style={{width:52}}>Photo</th><th>ID</th><th>Name</th><th>Metal</th><th>Purity</th><th>Category</th></tr></thead>
-            <tbody>
-              {filtered.map((d,i)=>(
-                <tr key={d.id} style={{cursor:"pointer"}} onClick={()=>setLbIdx(i)}
-                  onMouseEnter={e=>e.currentTarget.style.background="var(--dark3)"}
-                  onMouseLeave={e=>e.currentTarget.style.background=""}>
-                  <td>
-                    {d.photo
-                      ? <img src={d.photo} style={{width:40,height:40,objectFit:"cover",borderRadius:"3px",border:"1px solid var(--dark4)",display:"block"}} alt={d.id}/>
-                      : <div style={{width:40,height:40,background:"var(--dark3)",borderRadius:"3px",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"9px",color:"var(--dark4)",border:"1px solid var(--dark4)"}}>—</div>
-                    }
-                  </td>
-                  <td style={{color:"var(--gold)",fontWeight:"600"}}>{d.id}</td>
-                  <td>{d.name}</td>
-                  <td><span className={`badge ${d.metalType==="Gold"?"badge-gold":"badge-silver"}`}>{d.metalType}</span></td>
-                  <td><span className="badge badge-blue">{d.purity}</span></td>
-                  <td style={{color:"var(--gold-dim)"}}>{d.category}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {lbIdx!==null && filtered.length>0 && (
-        <DesignLightbox design={filtered[lbIdx]} designs={filtered} onClose={()=>setLbIdx(null)} />
-      )}
-    </div>
-  );
-}
 
 // ── Image compress helper (max ~50KB, 200×200px) ─────────────────────────────
-function compressImage(file, cb) {
-  const reader = new FileReader();
-  reader.onload = e => {
-    const img = new Image();
-    img.onload = () => {
-      const MAX = 200;
-      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const canvas = document.createElement("canvas");
-      canvas.width = w; canvas.height = h;
-      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-      let q = 0.7;
-      let dataUrl = canvas.toDataURL("image/jpeg", q);
-      // Reduce quality until under ~65KB (base64 overhead)
-      while(dataUrl.length > 88000 && q > 0.2) { q -= 0.1; dataUrl = canvas.toDataURL("image/jpeg", q); }
-      cb(dataUrl);
-    };
-    img.src = e.target.result;
-  };
-  reader.readAsDataURL(file);
-}
 
 // ── Design thumbnail component ────────────────────────────────────────────────
-function DesignThumb({ photo, size=32, onClick }) {
-  if(!photo) return (
-    <div onClick={onClick} style={{ width:size, height:size, borderRadius:"2px", background:"var(--dark4)",
-      display:"flex", alignItems:"center", justifyContent:"center", fontSize:size<36?"8px":"11px",
-      color:"var(--text-dim)", cursor:onClick?"pointer":"default", flexShrink:0, border:"1px solid var(--dark4)" }}>
-      {onClick ? "+" : "—"}
-    </div>
-  );
-  return (
-    <img src={photo} onClick={onClick} alt="design"
-      style={{ width:size, height:size, objectFit:"cover", borderRadius:"2px",
-        border:"1px solid var(--dark4)", cursor:onClick?"pointer":"default", flexShrink:0 }}/>
-  );
-}
 
 
 function SettingsView({ db, updateDB, onExport, onWipe, onImport, user, can, openTab, company }) {

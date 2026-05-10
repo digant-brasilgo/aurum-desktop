@@ -1,7 +1,7 @@
 # AURUM PROJECT — SESSION HANDOFF DOCUMENT
-**For: Next Claude session (Aurum 3)**
-**Written by: Claude (Aurum 2 session)**
-**Date: 5 May 2026**
+**For: Next Claude session (Aurum 4)**
+**Written by: Claude (Aurum 3 session)**
+**Date: 10 May 2026**
 **Client: Digant Toshniwal, Delhi**
 **Company: Brasilgo Jewels Private Limited & Nimbark Jewels**
 
@@ -21,7 +21,7 @@
 - **Companies:** Brasilgo Jewels Private Limited + Nimbark Jewels
 - **Role:** Owner/Admin
 - **Server PC username:** Server
-- **GitHub:** digant-brasilgo
+- **GitHub:** digant-brasilgo (repo: aurum-desktop, pushed and synced)
 
 ---
 
@@ -36,6 +36,7 @@
 - **Runs on:** Server PC (Windows 10)
 - **LAN server:** Port 3737 (HTTP)
 - **package.json name:** `"aurum"` (critical — determines userData path)
+- **MainApp.jsx:** ~19,035 lines (cleaned in Aurum 3)
 
 ### B) AUB — AURUM Business
 - **What:** Financial management companion to AUD (invoicing, ledger, payments)
@@ -45,6 +46,7 @@
 - **Auth:** `%APPDATA%\aurum-business\aurum-business-auth.json`
 - **Port:** 3738
 - **Users:** Admin and CO only
+- **AUB App.jsx:** ~4,909 lines
 
 ### C) AUL — AURUM Lite
 - **What:** Android mobile app for PM/DM on shop floor
@@ -107,24 +109,28 @@
 ### AUD
 ```
 D:\Aurum\aurum-desktop\
-  main.js              ← Express server + safety checks
-  src\MainApp.jsx      ← ALL views (~18,436 lines)
-  src\AurumApp.jsx     ← Root, auth, theme
+  main.js                ← Express server + safety checks + price fetching
+  preload.js             ← Electron IPC bridge (exposes window.aurum)
+  vite.config.js         ← Minimal safe config (base: './', outDir: 'dist')
+  src\
+    MainApp.jsx          ← ALL views (~19,035 lines)
+    AurumApp.jsx         ← Root, auth, theme, company switching
+    UserManagement.jsx   ← User admin with admin password reset
 ```
 
 ### AUB
 ```
 D:\Aurum\aurum-business\
-  electron.js          ← Encrypted data handling
-  src\App.jsx          ← ALL views (~4,909 lines)
+  electron.js            ← Encrypted data handling
+  src\App.jsx            ← ALL views (~4,909 lines)
 ```
 
 ### AUL
 ```
 D:\Aurum\aurum-lite\
-  app.json             ← version 1.0.4, versionCode 4
-  assets\icon.png      ← AURUM Lite logo 1024x1024
-  src\utils\api.js     ← 3000ms timeout, isCheckingRef guard
+  app.json               ← version 1.0.4, versionCode 4
+  assets\icon.png        ← AURUM Lite logo 1024x1024
+  src\utils\api.js       ← 3000ms timeout, isCheckingRef guard
   src\screens\LoginScreen.js
 ```
 
@@ -132,14 +138,38 @@ D:\Aurum\aurum-lite\
 ```
 %APPDATA%\aurum\data\brasilgo\backups\   ← Hourly, keep 30
 G:\Aurum\backups\brasilgo\
-G:\Aurum\aurum-desktop\                  ← Source backup
+G:\Aurum\aurum-desktop\                  ← Source backup (xcopy)
 G:\Aurum\aurum-lite\
 G:\Aurum\aurum-business\
+D:\Aurum\aurum-desktop\src\MainApp.jsx.bak  ← Always keep before replacing!
+```
+
+### GitHub
+```
+https://github.com/digant-brasilgo/aurum-desktop
+Push command: cd /d D:\Aurum\aurum-desktop && git add . && git commit -m "..." && git push
 ```
 
 ---
 
-## 6. CRITICAL TECHNICAL DETAILS
+## 6. EXTERNAL APIs USED IN AUD
+
+All keys stored in AUD Settings (not hardcoded):
+
+| API | Purpose | Account needed | Key field in Settings |
+|-----|---------|---------------|----------------------|
+| metalpriceapi.com | Live gold/silver prices (primary) | Yes — paid | `metalPriceApiKey` |
+| metals.dev | Live gold/silver prices (fallback) | Yes — paid | `metalsDevApiKey` |
+| fawazahmed0 CDN (jsdelivr) | Free metals/currency (fallback) | No | — |
+| gold-api.com | Free gold price (fallback) | No | — |
+| frankfurter.app | Free USD→INR rate | No | — |
+| news.google.com RSS | Jewellery news ticker | No | — |
+
+⚠️ App works without paid API keys — falls back to free sources automatically.
+
+---
+
+## 7. CRITICAL TECHNICAL DETAILS
 
 ### DB Safety (AUD main.js — 5 checks on POST /api/data)
 1. Incoming has 0 bags, server has 5+ → blocked
@@ -152,72 +182,97 @@ G:\Aurum\aurum-business\
 - `round3(n)` = `Math.round(n * 1000) / 1000`
 - Applied at all weight storage points — prevents floating point drift
 
-### Data Concepts
+### Key Data Concepts
 - **Bag:** 1 bag = 1 design in production. No `itemId` (removed). Bag No. is the identifier.
 - **Order:** Multiple bags, same `orderNo`. Items store qty, metalType, purity, partsPerUnit.
-- **Qty ×2:** Stored as single entry with qty=2, shown as ×2 badge. Not duplicated.
+- **Qty ×2:** Stored as single entry with qty=2, shown as ×2 badge.
 - **Unbagged items:** Decrement as bags created, disappear when all done.
-- **Design Master:** `db.designMaster` = active system. `db.designs` = old (ignored).
+- **Design Master:** `db.designMaster` = active. `db.designs` = old (ignored).
+- **Batch Filing:** `db.batchFilings` = unnumbered casting batches before bags are created.
 
 ### AUB ↔ AUD
 - AUB syncs via `http://localhost:3737/api/data`
 - CO receipts → AUB Sales → From Desktop
-- **By Order view:** Groups receipts by orderNo, checkboxes, one invoice per order
-- **By Bag view:** Individual receipts, original behaviour
+- By Order view: groups by orderNo, checkboxes, one invoice per order
+- By Bag view: individual receipts
+
+### AUL Connection
+- Timeout: 3000ms, isCheckingRef guard prevents race condition
+- Works on AURUM-FLOOR WiFi only
+- Parental Control must be "Ban Internet Access" (not URL Whitelist)
 
 ---
 
-## 7. WORK COMPLETED IN AURUM 2 SESSION (5 May 2026)
+## 8. WORK COMPLETED IN AURUM 3 SESSION (10 May 2026)
 
-### AUD (MainApp.jsx)
-- Design Master category dropdown — reads from `db.categories`
-- Design Prefix removed from categories (redundant)
-- Bags tab — grid/list toggle with photo cards
-- Item Register tab removed
-- Edit Bag — photo upload added
-- `round3()` — weight precision fixed (PM weight drift bug)
-- Customer edit — fixed as modal (was never working)
-- Order form — Metal, Purity, Qty, Parts/Unit per item
-- `itemId` removed completely (bags, orders, UI, matching logic)
-- Qty shown as ×2 badge — no duplication
-- Unbagged items decrement per bag created
-- Cancel Order — blocks if bags exist
-- Delete Cancelled Order
-- Order status badge — Cancelled in red
+### AUD — New Features (MainApp.jsx)
 
-### AUD (main.js)
-- Safety checks: 2 → 5 blocks
-- Fixed duplicate `currentSize` syntax error
+**Batch Pre-Processing tab** (inside Bags tab):
+- New sub-tab "⬡ Batch Pre-Processing" for unnumbered casting batches
+- Create batch: name, metal, purity, issued weight, dept, karigar
+- Receive back: enter received weight → loss auto-posted to karigar ledger + PM Book
+- Edit batch (locked fields after receiving)
+- Reverse batch (Issued: full delete / Received: removes loss entry, resets to Issued)
+- Mark Settled manually
+- "Create Bags from Batch" button → switches to Bags tab
+- `db.batchFilings[]` new collection added to initDB
 
-### AUB (App.jsx)
-- `handleImportFromDesktopMulti()` — multi-receipt order invoice
-- `PendingReceiptsPanel` — By Order / By Bag toggle
-- By Order — grouping, checkboxes, order-level invoice
-- By Bag — original view preserved
-- Order No. badge shown on bag rows
+**Automations:**
+1. **Auto-complete Order** — when last bag delivered to CO, order status → Completed automatically
+2. **QC Pass → Auto-deliver** — after QC Pass, prompt "Deliver to CO now?" Y/N
+3. **Karigar Loss Auto-alert** — after receiving, if loss% > dept threshold → alert with month-to-date cumulative
+4. **PM Book Reconciliation** — ⚖ Reconcile button, proper modal with table (Ledger High / Physical High / Ledger Deficit)
+5. **Customer Gold Auto-settlement** — after CO receipt finalise, if customer pure gold balance = 0 → prompt to mark settled (uses PURITY_FACTORS conversion)
+6. **Stone Settlement Modal** — auto-triggered when receiving bag from Setting dept — enter set/returned/broken stones inline
 
-### AUL
-- Timeout 5000→3000ms
-- `isCheckingRef` race condition fix
-- App icon added (AURUM Lite logo)
-- APK v1.0.4 built and installed
+**Other fixes:**
+- Sticker print gap removed (fixed height removed from sticker cells)
+- Cosmetic improvements: darker theme, better shadows, smoother transitions, gold gradient accents, nav hover glow, badge padding
 
-### Network
-- Parental Control: URL Whitelist → Ban Internet Access (was blocking port 3737)
+**Code cleanup:**
+- Removed 8 dead functions (191 lines): `isRepairItem`, `generateItemId`, `generateDesignNo`, `loadFromStorage`, `saveToStorage`, `DesignGalleryTab`, `compressImage`, `DesignThumb`
+
+### AUD — UserManagement.jsx
+- Added **🔑 Reset Pw** button (admin only) — reset any user's password without knowing old password
+- Added `React` import (was missing)
+- Uses `onMouseDown` to avoid focus-blur click issue
+
+### AUD — preload.js
+- Added `adminResetPassword` to `window.aurum.auth` bridge
+
+### AUD — main.js
+- Added `auth:adminResetPassword` IPC handler
+- Added `/api/admin-reset-password` HTTP route (admin only)
+- Added two safe background throttling flags
+- ⚠️ vite.config.js must stay minimal (base: './', outDir: 'dist') — chunk splitting breaks Electron
+
+### GitHub
+- First push to digant-brasilgo/aurum-desktop
+- `.gitignore` excludes: node_modules/, dist/, release/
 
 ---
 
-## 8. PENDING / FUTURE WORK
+## 9. IMPORTANT WARNINGS
 
-- **Jewellery tag printing** — TSC TTP-244, TSPL commands, barcode, scan-to-invoice. Discussed, deferred.
-- **AUB order invoice status** — Pending/Partial/Invoiced tracking per order. Not yet built.
+- **vite.config.js** — keep MINIMAL. Any `manualChunks` or chunk splitting BREAKS the app (Electron can't load split chunks via file://)
+- **MainApp.jsx.bak** — ALWAYS backup before replacing: `copy "D:\Aurum\aurum-desktop\src\MainApp.jsx" "D:\Aurum\aurum-desktop\src\MainApp.jsx.bak"`
+- **G: drive xcopy** — only run AFTER a successful build, not before
+- **AUL Parental Control** — must be "Ban Internet Access". URL Whitelist blocks port 3737.
+
+---
+
+## 10. PENDING / FUTURE WORK
+
+- **Jewellery tag printing** — TSC TTP-244, TSPL, barcode, scan-to-invoice. Deferred.
+- **AUB order invoice status** — Pending/Partial/Invoiced per order. Not built.
 - **AUL company logo** — still null in `/api/status`
 - **AUL DM phone** — add when ready (IP .101, same router setup)
-- **`db.designs` cleanup** — old data still in DB, can be wiped manually
+- **`db.designs` cleanup** — old Item Register data in DB, can wipe manually
+- **Commercialisation** — see `AURUM_Commercialisation_Roadmap.md` in D:\Aurum\
 
 ---
 
-## 9. HOW TO START A NEW SESSION
+## 11. HOW TO START A NEW SESSION
 
 *"I am Digant Toshniwal from Delhi. Please read my previous AURUM conversation transcripts — look for 'AURUM' sessions. I am pasting my session handoff document. We are continuing work on AUD (AURUM Desktop/Electron), AUB (AURUM Business/Electron), and AUL (AURUM Lite/React Native Android). Latest MainApp.jsx or App.jsx will be provided when needed."*
 
@@ -225,30 +280,42 @@ Then paste this document.
 
 ---
 
-## 10. REBUILD COMMANDS
+## 12. REBUILD & BACKUP COMMANDS
 
 ```cmd
-:: AUD
+:: Backup MainApp FIRST before replacing
+copy "D:\Aurum\aurum-desktop\src\MainApp.jsx" "D:\Aurum\aurum-desktop\src\MainApp.jsx.bak"
+
+:: AUD rebuild
 Right-click D:\Aurum\aurum-desktop\build-aurum.bat → Run as Administrator
 
-:: AUB
-cd D:\Aurum\aurum-business && npm run build && npx electron-builder --win --x64
+:: AUB rebuild
+cd /d D:\Aurum\aurum-business && npm run build && npx electron-builder --win --x64
 
-:: AUL
-cd D:\Aurum\aurum-lite && eas build -p android --profile preview
+:: AUL rebuild
+cd /d D:\Aurum\aurum-lite && eas build -p android --profile preview
 
-:: Tests
-cd D:\Aurum\aurum-tests && npm test
-
-:: G: drive backup
+:: G: drive backup (after successful build only)
 xcopy "D:\Aurum\aurum-desktop" "G:\Aurum\aurum-desktop" /E /I /H /Y
 xcopy "D:\Aurum\aurum-lite" "G:\Aurum\aurum-lite" /E /I /H /Y
 xcopy "D:\Aurum\aurum-business" "G:\Aurum\aurum-business" /E /I /H /Y
 
-:: Verify server
+:: GitHub push
+cd /d D:\Aurum\aurum-desktop
+git add .
+git commit -m "Describe changes"
+git push
+
+:: Verify server running
 curl http://192.168.1.7:3737/api/status
+
+:: Verify firewall rule
+netsh advfirewall firewall show rule name="AURUM"
+
+:: PM Book reconcile test
+Open AUD → PM Book → ⚖ Reconcile button
 ```
 
 ---
 
-*Aurum 1 + Aurum 2 sessions complete. Next: Aurum 3*
+*Aurum 1 + Aurum 2 + Aurum 3 sessions complete. Next: Aurum 4*
