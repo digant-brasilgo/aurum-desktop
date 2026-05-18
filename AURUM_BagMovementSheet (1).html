@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AURUM — Bag Movement Sheet</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&display=swap');
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'DM Sans',sans-serif; font-size:10.5px; background:#fff; color:#111; }
+
+  .page-a {
+    width:210mm; height:297mm;
+    padding:6mm 7mm 6mm 19mm;
+    position:relative; overflow:hidden;
+    page-break-after:always;
+    display:flex; flex-direction:column; gap:3mm;
+  }
+
+  .page-b {
+    width:210mm; height:297mm;
+    padding:6mm 19mm 6mm 7mm;
+    position:relative; overflow:hidden;
+    page-break-after:always;
+    display:flex; flex-direction:column; gap:3mm;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    display:grid; grid-template-columns:1fr auto 1fr;
+    align-items:center;
+    border-top:2.5px solid #111;
+    border-bottom:1px solid #444;
+    padding:3mm 0 2.5mm;
+    flex-shrink:0;
+  }
+  .sheet-title { font-size:16px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; }
+  .sheet-subtitle { font-size:8px; letter-spacing:2px; color:#888; text-transform:uppercase; margin-top:1mm; }
+  .side-label { font-size:12px; font-weight:700; letter-spacing:5px; text-transform:uppercase; color:#111; text-align:center; }
+  .sheet-no { font-family:'Courier New',monospace; font-size:15px; font-weight:700; border:2px solid #cc0000; padding:1.5mm 4mm; display:inline-block; letter-spacing:3px; color:#cc0000; }
+
+  /* ── FIELDS ── */
+  .field { display:flex; flex-direction:column; gap:1mm; }
+  .field label { font-size:7.5px; font-weight:700; letter-spacing:1.2px; text-transform:uppercase; color:#555; }
+  .line { border-bottom:1px solid #aaa; height:7mm; width:100%; }
+  .line-tall { border-bottom:1px solid #aaa; height:9mm; width:100%; }
+  .fg { display:grid; gap:2.5mm; }
+  .c2 { grid-template-columns:repeat(2,1fr); }
+  .c3 { grid-template-columns:repeat(3,1fr); }
+  .c4 { grid-template-columns:repeat(4,1fr); }
+  .c5 { grid-template-columns:repeat(5,1fr); }
+
+  /* ── SECTION HEADING ── */
+  .sh { flex-shrink:0; }
+  .sh-title {
+    font-size:10px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:#111;
+    border-bottom:2px solid #111; padding-bottom:1mm;
+    display:flex; justify-content:space-between; align-items:baseline;
+  }
+  .sh-sub { font-size:7.5px; font-weight:400; color:#888; letter-spacing:0.5px; text-transform:none; font-style:italic; }
+
+  /* ── TABLES ── */
+  table { width:100%; border-collapse:collapse; font-size:9px; font-family:'DM Mono',monospace; flex-shrink:0; }
+  table th {
+    background:#efefef; border:0.8px solid #aaa;
+    padding:1.5mm 1.5mm; font-size:7.5px; font-weight:700;
+    letter-spacing:0.8px; text-transform:uppercase; text-align:center;
+    font-family:'DM Sans',sans-serif; line-height:1.4; color:#222;
+  }
+  table td { border:0.5px solid #ccc; padding:0; height:9mm; vertical-align:bottom; }
+  .shaded { background:#f4f4f4; text-align:center; color:#aaa; font-size:8px; font-family:'DM Sans',sans-serif; font-weight:600; }
+  .trow td { background:#e8e8e8; font-weight:700; border:0.8px solid #888; font-size:9px; }
+  .bb { border-right:2px solid #555 !important; }
+  .tr { text-align:right; padding-right:2mm !important; }
+  .tc { text-align:center; }
+
+  /* ── SUMMARY ── */
+  .sum-strip { border:1.5px solid #333; display:grid; flex-shrink:0; }
+  .sc { padding:2mm 2.5mm; text-align:center; border-right:1px solid #bbb; }
+  .sc:last-child { border-right:none; }
+  .sc .sl { font-size:7px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase; color:#555; margin-bottom:1mm; }
+  .sc .sv { border-bottom:1px solid #aaa; height:6.5mm; }
+
+  /* ── REMARKS ── */
+  .rem { border:1px solid #ccc; padding:2mm 3mm; flex:1; }
+  .rl { border-bottom:0.5px solid #ccc; height:8.5mm; }
+
+  /* ── DIVIDERS ── */
+  .div-solid { border-top:1.5px solid #333; flex-shrink:0; }
+  .div-dash  { border-top:1px dashed #bbb; flex-shrink:0; }
+
+  /* ── PRINT ── */
+  @media print {
+    body { background:#fff; }
+    .no-print { display:none !important; }
+    @page { size:A4; margin:0; }
+    .page-a, .page-b { page-break-after:always; }
+  }
+
+  /* ── SCREEN ── */
+  .infobar { position:fixed; bottom:0; left:0; right:0; background:#111; color:#fff; font-size:11px; padding:8px 16px; z-index:100; }
+</style>
+</head>
+<body>
+
+<div class="infobar no-print">AURUM Bag Movement Sheet · A4 Double-Sided · Side A: left binding · Side B: right binding</div>
+
+<!-- ════════════ SIDE A ════════════ -->
+<div class="page-a">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div>
+      <div class="sheet-title">Bag Movement Record</div>
+      <div class="sheet-subtitle">AURUM Production Tracking</div>
+    </div>
+    <div><div class="side-label">SIDE &nbsp; A</div></div>
+    <div style="text-align:right;">
+      <div class="sheet-no">SHEET NO. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+      <div style="margin-top:2mm;">
+        <div style="font-size:7.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#555;margin-bottom:1mm;">Date</div>
+        <div style="border-bottom:1px solid #aaa;height:7mm;width:100%;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BAG IDENTITY -->
+  <div style="display:flex;flex-direction:column;gap:2.5mm;flex-shrink:0;">
+    <div class="fg c4">
+      <div class="field"><label>Bag No.</label><div class="line"></div></div>
+      <div class="field"><label>Design ID</label><div class="line"></div></div>
+      <div class="field"><label>Order No.</label><div class="line"></div></div>
+      <div class="field"><label>Category</label><div class="line"></div></div>
+    </div>
+    <div class="fg c4">
+      <div class="field" style="grid-column:span 2;"><label>Customer Name</label><div class="line"></div></div>
+      <div class="field"><label>Metal Type</label><div class="line"></div></div>
+      <div class="field"><label>Purity / Alloy</label><div class="line"></div></div>
+    </div>
+    <div class="fg c4">
+      <div class="field"><label>Issued Weight (g)</label><div class="line"></div></div>
+      <div class="field"><label>No. of Pieces</label><div class="line"></div></div>
+      <div class="field"><label>Bag Created Date</label><div class="line"></div></div>
+      <div class="field"><label>Target Date</label><div class="line"></div></div>
+    </div>
+  </div>
+
+  <div class="div-solid"></div>
+
+  <!-- DEPARTMENT MOVEMENTS -->
+  <div class="sh"><div class="sh-title">Department Movements <span class="sh-sub">One row per issue / receive cycle — same department may repeat</span></div></div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:6mm;">#</th>
+        <th style="width:20mm;">Date Issued</th>
+        <th style="width:30mm;">Department</th>
+        <th style="width:28mm;">Karigar Name</th>
+        <th style="width:22mm;">Issued (g)</th>
+        <th style="width:22mm;">Date Received</th>
+        <th style="width:22mm;">Received (g)</th>
+        <th>Remarks</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="shaded">1</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">2</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">3</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">4</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">5</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">6</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">7</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">8</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">9</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">10</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">11</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr class="trow">
+        <td colspan="4" style="text-align:right;font-size:8px;letter-spacing:1px;padding-right:3mm;">TOTALS →</td>
+        <td class="tr"></td><td></td><td class="tr"></td><td></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- EXTRA METAL -->
+  <div class="sh"><div class="sh-title">Extra Metal Record <span class="sh-sub">Additional metal issued to / returned from karigar</span></div></div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:6mm;">#</th>
+        <th style="width:20mm;">Date</th>
+        <th style="width:22mm;">Type (IN / OUT)</th>
+        <th style="width:28mm;">Karigar</th>
+        <th style="width:28mm;">Department</th>
+        <th style="width:22mm;">Weight (g)</th>
+        <th>Reason / Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="shaded">1</td><td></td><td class="tc"></td><td></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">2</td><td></td><td class="tc"></td><td></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">3</td><td></td><td class="tc"></td><td></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">4</td><td></td><td class="tc"></td><td></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">5</td><td></td><td class="tc"></td><td></td><td></td><td class="tr"></td><td></td></tr>
+    </tbody>
+  </table>
+
+  <!-- SUMMARY -->
+  <div class="sum-strip" style="grid-template-columns:repeat(3,1fr);">
+    <div class="sc"><div class="sl">Total Issued (g)</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Total Extra Metal OUT (g)</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Total Received (g)</div><div class="sv"></div></div>
+  </div>
+
+</div><!-- end page-a -->
+
+
+<!-- ════════════ SIDE B ════════════ -->
+<div class="page-b">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div>
+      <div class="sheet-title">Bag Movement Record</div>
+      <div class="sheet-subtitle">Stones · Delivery · Notes · Sign-off</div>
+    </div>
+    <div><div class="side-label">SIDE &nbsp; B</div></div>
+    <div style="text-align:right;">
+      <div class="sheet-no">SHEET NO. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+      <div class="fg c2" style="margin-top:2mm;">
+        <div class="field"><label>Bag No.</label><div class="line"></div></div>
+        <div class="field"><label>Design ID</label><div class="line"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STONE SECTION -->
+  <div class="sh"><div class="sh-title">Stone Record — Setting Department <span class="sh-sub">Per stone type · issued · set in jewellery · returned · broken</span></div></div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:6mm;">#</th>
+        <th style="width:24mm;">Stone Type</th>
+        <th style="width:19mm;">Date Issued</th>
+        <th style="width:24mm;">Issued To (Karigar)</th>
+        <th style="width:16mm;">Issued<br>Pcs</th>
+        <th style="width:16mm;">Issued<br>Carats</th>
+        <th style="width:16mm;">Set in<br>Jwlry Pcs</th>
+        <th style="width:16mm;">Returned<br>Pcs</th>
+        <th style="width:16mm;">Returned<br>Carats</th>
+        <th style="width:14mm;">Broken<br>Pcs</th>
+        <th>Remarks</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="shaded">1</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">2</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">3</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">4</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">5</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">6</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">7</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr class="trow">
+        <td colspan="4" style="text-align:right;font-size:8px;letter-spacing:1px;padding-right:3mm;">TOTALS →</td>
+        <td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- STONE SUMMARY -->
+  <div class="sum-strip" style="grid-template-columns:repeat(4,1fr);">
+    <div class="sc"><div class="sl">Stone Types</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Total Pcs Issued</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Total Carats Issued</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Total Pcs Broken</div><div class="sv"></div></div>
+  </div>
+
+  <div class="div-solid"></div>
+
+  <!-- CO DELIVERY -->
+  <div class="sh"><div class="sh-title">CO Delivery &amp; Receipt</div></div>
+  <div class="fg c5" style="flex-shrink:0;">
+    <div class="field"><label>Delivered Date</label><div class="line"></div></div>
+    <div class="field"><label>Delivered By (PM)</label><div class="line"></div></div>
+    <div class="field"><label>Received By (CO)</label><div class="line"></div></div>
+    <div class="field"><label>Final Net Wt (g)</label><div class="line"></div></div>
+    <div class="field"><label>Gross Wt (g)</label><div class="line"></div></div>
+  </div>
+
+  <div class="div-dash"></div>
+
+  <!-- GENERAL REMARKS -->
+  <div class="sh"><div class="sh-title">General Remarks / Notes</div></div>
+  <div class="rem">
+    <div class="rl"></div>
+    <div class="rl"></div>
+    <div class="rl"></div>
+    <div class="rl"></div>
+    <div class="rl"></div>
+    <div class="rl"></div>
+    <div class="rl"></div>
+  </div>
+
+  <!-- SIGNATURES -->
+  <div class="div-dash"></div>
+  <div class="sh" style="margin-bottom:2mm;"><div class="sh-title">Authorisation &amp; Sign-off</div></div>
+  <div class="fg c3" style="flex-shrink:0;">
+    <div class="field"><label>PM — Production Manager</label><div class="line-tall"></div></div>
+    <div class="field"><label>CO — Central Office</label><div class="line-tall"></div></div>
+    <div class="field"><label>Admin / Owner Verified</label><div class="line-tall"></div></div>
+  </div>
+
+  <!-- FINAL SUMMARY -->
+  <div class="sum-strip" style="grid-template-columns:repeat(4,1fr);">
+    <div class="sc"><div class="sl">Initial Issued (g)</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Extra Metal Total (g)</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Final Net Weight (g)</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Completed Date</div><div class="sv"></div></div>
+  </div>
+
+</div><!-- end page-b -->
+
+<!-- AUTO NUMBERING -->
+<div class="no-print" style="position:fixed;top:12px;right:12px;background:#fff;border:2px solid #333;padding:12px 16px;font-family:'DM Sans',sans-serif;font-size:12px;z-index:100;display:flex;align-items:center;gap:12px;box-shadow:0 2px 12px rgba(0,0,0,0.15);">
+  <span style="font-weight:700;letter-spacing:1px;font-size:11px;">FROM</span>
+  <input id="start-no" type="number" min="1" value="1" style="width:55px;font-size:14px;font-weight:700;border:1.5px solid #999;padding:4px 6px;text-align:center;font-family:'Courier New',monospace;color:#cc0000;">
+  <span style="font-size:11px;color:#888;">×</span>
+  <input id="copies" type="number" min="1" max="50" value="1" style="width:50px;font-size:14px;border:1.5px solid #999;padding:4px 6px;text-align:center;font-family:'Courier New',monospace;">
+  <span style="font-size:10px;color:#888;">copies</span>
+  <button onclick="doPrint()" style="background:#111;color:#fff;border:none;padding:8px 18px;font-size:12px;cursor:pointer;letter-spacing:1px;font-family:'DM Sans',sans-serif;font-weight:600;">⎙ PRINT</button>
+  <span id="last-info" style="font-size:10px;color:#aaa;"></span>
+</div>
+
+<script>
+(function(){
+  var KEY = 'aurum_sheet_no';
+  var last = parseInt(localStorage.getItem(KEY)||'0');
+  document.getElementById('start-no').value = last + 1;
+  if(last > 0) document.getElementById('last-info').textContent = 'Last: ' + pad(last);
+
+  function pad(n){ return n < 10 ? '0'+n : ''+n; }
+
+  window.doPrint = function(){
+    var start = parseInt(document.getElementById('start-no').value)||1;
+    var cnt   = parseInt(document.getElementById('copies').value)||1;
+    var last  = start + cnt - 1;
+
+    var pageA = document.querySelector('.page-a').outerHTML;
+    var pageB = document.querySelector('.page-b').outerHTML;
+    var style = document.querySelector('style').outerHTML;
+
+    var pages = '';
+    for(var i=0;i<cnt;i++){
+      var no = pad(start + i);
+      var a = pageA.replace(/SHEET NO\. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/g, 'SHEET NO. ' + no);
+      var b = pageB.replace(/SHEET NO\. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/g, 'SHEET NO. ' + no);
+      pages += a + b;
+    }
+
+    localStorage.setItem(KEY, last);
+    document.getElementById('last-info').textContent = 'Last: ' + pad(last);
+    document.getElementById('start-no').value = last + 1;
+
+    var w = window.open('','_blank');
+    w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8">'+style+'<style>@media print{.no-print{display:none!important;}@page{size:A4;margin:0;}body{margin:0;}}</style></head><body>'+pages+'</body></html>');
+    w.document.close();
+    w.onload = function(){ w.print(); };
+    setTimeout(function(){ if(!w.closed) w.print(); }, 1200);
+  };
+})();
+</script>
+
+</body>
+</html>

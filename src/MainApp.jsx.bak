@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, Component } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, Component } from "react";
 import UserManagementInner from "./UserManagement.jsx";
 import sounds from "./aurumSounds.js";
 
@@ -946,6 +946,7 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
     { id:"pmbook",    label:"PM Book",        icon:"📒", group:"production" },
     { id:"movement",  label:"Movement",       icon:"⇄", group:"production" },
     { id:"groups",    label:"Groups",         icon:"⊞", group:"production" },
+    { id:"printsheets", label:"Print Sheets", icon:"⎙", group:"production" },
     { id:"karigars",  label:"Karigars",       icon:"✦", group:"assets" },
     { id:"stones",    label:"Stones",         icon:"💎", group:"assets" },
     { id:"customers", label:"Customers",      icon:"👤", group:"assets" },
@@ -1861,6 +1862,16 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
           animation: aurumShimmer 3s ease-in-out infinite;
           pointer-events: none;
         }
+        @keyframes hexPulse { 0%,100%{opacity:0.06} 50%{opacity:0.22} }
+        .hex-float { position:absolute; color:#c8a850; pointer-events:none; user-select:none; font-size:13px; animation:hexPulse 3s ease-in-out infinite; will-change:opacity; transform:translateZ(0); }
+        .hex-float:nth-child(1){animation-delay:0.0s;animation-duration:2.4s;}
+        .hex-float:nth-child(2){animation-delay:0.8s;animation-duration:3.2s;}
+        .hex-float:nth-child(3){animation-delay:1.6s;animation-duration:2.8s;}
+        .hex-float:nth-child(4){animation-delay:0.4s;animation-duration:3.6s;}
+        .hex-float:nth-child(5){animation-delay:1.2s;animation-duration:2.6s;}
+        .hex-float:nth-child(6){animation-delay:2.0s;animation-duration:3.0s;}
+        .hex-float:nth-child(7){animation-delay:0.9s;animation-duration:2.9s;}
+        .hex-bob-0,.hex-bob-1,.hex-bob-2,.hex-bob-3,.hex-bob-4,.hex-bob-5,.hex-bob-6{display:none;}
       `}</style>
 
 
@@ -1910,6 +1921,8 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
               if (t.id === "settings") return isAdminOrCO;
               // PM Book — visible to all roles
               if (t.id === "pmbook") return true;
+              // Print Sheets — visible to all roles
+              if (t.id === "printsheets") return true;
               // Restricted stock tabs — admin/co only
               if(stockTabsAdminOnly.includes(t.id)) return isAdminOrCO;
               if (!perm) return isAdminOrCO;
@@ -2077,15 +2090,19 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
                   </div>
                 );
               })}
+              {/* Live stats ticker — fills empty tab bar space */}
+              <div style={{ flex:1, overflow:"hidden", display:"flex", alignItems:"center", minWidth:0 }}>
+                <LiveStatsTicker />
+              </div>
             </div>
           )}
 
           <main style={{ flex:1, overflowY:"auto", minHeight:0, background:"var(--dark)", position:"relative" }}>
             {openTabs.map(tabId => (
               <div key={tabId} className={activeTab===tabId?"page-enter":""} style={{ display:activeTab===tabId?"block":"none", padding:"20px 24px", minHeight:"100%" }}>
-                {tabId==="dashboard" && <Dashboard db={db} />}
+                {tabId==="dashboard" && <Dashboard db={db} onBagClick={(bagId)=>{ setNavToBagId(bagId); openTab("bags"); }} />}
                 {tabId==="co"        && <CentralOfficeView db={db} updateDB={updateDB} setModal={setModal} user={user} dateRange={globalDateRange} onShowDigest={()=>setShowDigest(true)} />}
-                {tabId==="bags"      && <BagsView db={db} updateDB={updateDB} setModal={setModal} user={user} goToBagMovement={goToBagMovement} />}
+                {tabId==="bags"      && <BagsView db={db} updateDB={updateDB} setModal={setModal} user={user} goToBagMovement={goToBagMovement} initialBagId={navToBagId} onInitialBagConsumed={()=>setNavToBagId("")} />}
                 {tabId==="pmbook"    && <PMBookView db={db} updateDB={updateDB} user={user} />}
                 {tabId==="customers" && <CustomersView db={db} updateDB={updateDB} user={user} />}
                 {tabId==="purestock" && <PureMetalView db={db} updateDB={updateDB} user={user} dateRange={globalDateRange} />}
@@ -2095,6 +2112,7 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
                 {tabId==="casting"   && <CastingView db={db} updateDB={updateDB} user={user} can={can} openTab={openTab} />}
                 {tabId==="movement"  && <ErrorBoundary><MovementView db={db} updateDB={updateDB} user={user} initialBagId={navToBagId} onInitialBagConsumed={()=>setNavToBagId("")} /></ErrorBoundary>}
                 {tabId==="groups"    && <GroupsView db={db} updateDB={updateDB} setModal={setModal} user={user} />}
+                {tabId==="printsheets" && <PrintSheetsView />}
                 {tabId==="karigars"  && <KarigarsView db={db} updateDB={updateDB} user={user} />}
                 {tabId==="stones"    && <StonesView db={db} updateDB={updateDB} user={user} />}
                 {tabId==="reports"   && <ReportsView db={db} setModal={setModal} user={user} dateRange={globalDateRange} />}
@@ -2516,8 +2534,570 @@ function GroupedBar({ data, keys, colors, height=120 }) {
   );
 }
 
+// ============================================================
+// LIVE TICKER — Inspirational quotes + floating gold hexagons
+// ============================================================
+function LiveStatsTicker() {
+  const QUOTES = [
+    "Gold is the money of kings — silver is the money of gentlemen.",
+    "Every piece of jewellery tells a story worth keeping forever.",
+    "Crafted with patience. Worn with pride. Remembered forever.",
+    "Quality is never an accident — it is always the result of intelligent effort.",
+    "The details are not the details. They make the design.",
+    "Excellence is doing ordinary things extraordinarily well.",
+    "What gets measured gets mastered.",
+    "A satisfied customer is the best business strategy of all.",
+    "Precision in weight. Perfection in craft. Pride in delivery.",
+    "Behind every fine jewel is a record of trust and craftsmanship.",
+    "The pursuit of excellence is a journey, not a destination.",
+    "Know your metal. Know your craft. Know your customer.",
+    "Good records make great jewellers.",
+    "Every gram matters. Every customer matters. Every moment matters.",
+    "Craftsmanship is the art of making the difficult look effortless.",
+    "The finest gold is refined through the most intense fire.",
+    "Trust is built one perfect delivery at a time.",
+    "Measure twice. Cut once. Record always.",
+    "A jewel without provenance is a story without a beginning.",
+    "Strive not to be a success, but rather to be of value.",
+  ];
+
+  const [idx, setIdx]         = useState(0);
+  const [visible, setVisible] = useState(true);
+
+  // Quote rotation
+  useEffect(()=>{
+    const t = setInterval(()=>{
+      setVisible(false);
+      setTimeout(()=>{ setIdx(i=>(i+1)%QUOTES.length); setVisible(true); }, 600);
+    }, 8000);
+    return ()=>clearInterval(t);
+  }, []);
+
+  return (
+    <div style={{
+      position:"relative", width:"100%", height:"32px",
+      overflow:"hidden", display:"flex", alignItems:"center",
+      paddingLeft:"10px", paddingRight:"8px",
+    }}>
+      {/* SVG hexagon tile background */}
+      <svg style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%", opacity:0.18, pointerEvents:"none" }}
+        xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <pattern id="hexTile" x="0" y="0" width="28" height="24" patternUnits="userSpaceOnUse">
+            <polygon points="14,1 27,7.5 27,16.5 14,23 1,16.5 1,7.5" fill="none" stroke="#c8a850" strokeWidth="0.6"/>
+            <polygon points="28,13 41,19.5 41,28.5 28,35 15,28.5 15,19.5" fill="none" stroke="#c8a850" strokeWidth="0.6"/>
+          </pattern>
+          <linearGradient id="hexFade" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%"   stopColor="#000" stopOpacity="1"/>
+            <stop offset="15%"  stopColor="#000" stopOpacity="0"/>
+            <stop offset="50%"  stopColor="#000" stopOpacity="0"/>
+            <stop offset="85%"  stopColor="#000" stopOpacity="0"/>
+            <stop offset="100%" stopColor="#000" stopOpacity="1"/>
+          </linearGradient>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#hexTile)"/>
+        <rect width="100%" height="100%" fill="url(#hexFade)"/>
+      </svg>
+
+      {/* Quote with shimmer */}
+      <div style={{
+        display:"flex", alignItems:"center", gap:"8px",
+        width:"100%", paddingLeft:"6px",
+        borderLeft:"2px solid rgba(200,168,80,0.3)",
+      }}>
+        <span style={{ color:"rgba(200,168,80,0.4)", fontSize:"10px", flexShrink:0 }}>⬡</span>
+        <span className="aurum-shimmer-slow" style={{
+          position:"relative", zIndex:2,
+          fontSize:"11px",
+          fontFamily:"'Courier New', monospace",
+          letterSpacing:"0.5px",
+          whiteSpace:"nowrap",
+          overflow:"hidden",
+          textOverflow:"ellipsis",
+          fontStyle:"italic",
+          transition:"opacity 0.6s ease",
+          opacity: visible ? 1 : 0,
+          maxWidth:"100%",
+          color:"#b09050",
+        }}>
+          {QUOTES[idx]}
+        </span>
+        <span style={{ color:"rgba(200,168,80,0.4)", fontSize:"10px", flexShrink:0 }}>⬡</span>
+      </div>
+    </div>
+  );
+}
+
+const _SHEET_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AURUM — Bag Movement Sheet</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&display=swap');
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'DM Sans',sans-serif; font-size:10.5px; background:#fff; color:#111; }
+
+  .page-a {
+    width:210mm; height:297mm;
+    padding:6mm 7mm 6mm 19mm;
+    position:relative; overflow:hidden;
+    page-break-after:always;
+    display:flex; flex-direction:column; gap:3mm;
+  }
+
+  .page-b {
+    width:210mm; height:297mm;
+    padding:6mm 19mm 6mm 7mm;
+    position:relative; overflow:hidden;
+    page-break-after:always;
+    display:flex; flex-direction:column; gap:3mm;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    display:grid; grid-template-columns:1fr auto 1fr;
+    align-items:center;
+    border-top:2.5px solid #111;
+    border-bottom:1px solid #444;
+    padding:3mm 0 2.5mm;
+    flex-shrink:0;
+  }
+  .sheet-title { font-size:16px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; }
+  .sheet-subtitle { font-size:8px; letter-spacing:2px; color:#888; text-transform:uppercase; margin-top:1mm; }
+  .side-label { font-size:12px; font-weight:700; letter-spacing:5px; text-transform:uppercase; color:#111; text-align:center; }
+  .sheet-no { font-family:'Courier New',monospace; font-size:15px; font-weight:700; border:2px solid #cc0000; padding:1.5mm 4mm; display:inline-block; letter-spacing:3px; color:#cc0000; }
+
+  /* ── FIELDS ── */
+  .field { display:flex; flex-direction:column; gap:1mm; }
+  .field label { font-size:7.5px; font-weight:700; letter-spacing:1.2px; text-transform:uppercase; color:#555; }
+  .line { border-bottom:1px solid #aaa; height:7mm; width:100%; }
+  .line-tall { border-bottom:1px solid #aaa; height:9mm; width:100%; }
+  .fg { display:grid; gap:2.5mm; }
+  .c2 { grid-template-columns:repeat(2,1fr); }
+  .c3 { grid-template-columns:repeat(3,1fr); }
+  .c4 { grid-template-columns:repeat(4,1fr); }
+  .c5 { grid-template-columns:repeat(5,1fr); }
+
+  /* ── SECTION HEADING ── */
+  .sh { flex-shrink:0; }
+  .sh-title {
+    font-size:10px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:#111;
+    border-bottom:2px solid #111; padding-bottom:1mm;
+    display:flex; justify-content:space-between; align-items:baseline;
+  }
+  .sh-sub { font-size:7.5px; font-weight:400; color:#888; letter-spacing:0.5px; text-transform:none; font-style:italic; }
+
+  /* ── TABLES ── */
+  table { width:100%; border-collapse:collapse; font-size:9px; font-family:'DM Mono',monospace; flex-shrink:0; }
+  table th {
+    background:#efefef; border:0.8px solid #aaa;
+    padding:1.5mm 1.5mm; font-size:7.5px; font-weight:700;
+    letter-spacing:0.8px; text-transform:uppercase; text-align:center;
+    font-family:'DM Sans',sans-serif; line-height:1.4; color:#222;
+  }
+  table td { border:0.5px solid #ccc; padding:0; height:9mm; vertical-align:bottom; }
+  .shaded { background:#f4f4f4; text-align:center; color:#aaa; font-size:8px; font-family:'DM Sans',sans-serif; font-weight:600; }
+  .trow td { background:#e8e8e8; font-weight:700; border:0.8px solid #888; font-size:9px; }
+  .bb { border-right:2px solid #555 !important; }
+  .tr { text-align:right; padding-right:2mm !important; }
+  .tc { text-align:center; }
+
+  /* ── SUMMARY ── */
+  .sum-strip { border:1.5px solid #333; display:grid; flex-shrink:0; }
+  .sc { padding:2mm 2.5mm; text-align:center; border-right:1px solid #bbb; }
+  .sc:last-child { border-right:none; }
+  .sc .sl { font-size:7px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase; color:#555; margin-bottom:1mm; }
+  .sc .sv { border-bottom:1px solid #aaa; height:6.5mm; }
+
+  /* ── REMARKS ── */
+  .rem { border:1px solid #ccc; padding:2mm 3mm; flex:1; }
+  .rl { border-bottom:0.5px solid #ccc; height:8.5mm; }
+
+  /* ── DIVIDERS ── */
+  .div-solid { border-top:1.5px solid #333; flex-shrink:0; }
+  .div-dash  { border-top:1px dashed #bbb; flex-shrink:0; }
+
+  /* ── PRINT ── */
+  @media print {
+    body { background:#fff; }
+    .no-print { display:none !important; }
+    @page { size:A4; margin:0; }
+    .page-a, .page-b { page-break-after:always; }
+  }
+
+  /* ── SCREEN ── */
+  .infobar { position:fixed; bottom:0; left:0; right:0; background:#111; color:#fff; font-size:11px; padding:8px 16px; z-index:100; }
+</style>
+</head>
+<body>
+
+<div class="infobar no-print">AURUM Bag Movement Sheet · A4 Double-Sided · Side A: left binding · Side B: right binding</div>
+
+<!-- ════════════ SIDE A ════════════ -->
+<div class="page-a">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div>
+      <div class="sheet-title">Bag Movement Record</div>
+      <div class="sheet-subtitle">AURUM Production Tracking</div>
+    </div>
+    <div><div class="side-label">SIDE &nbsp; A</div></div>
+    <div style="text-align:right;">
+      <div class="sheet-no">SHEET NO. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+      <div style="margin-top:2mm;">
+        <div style="font-size:7.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#555;margin-bottom:1mm;">Date</div>
+        <div style="border-bottom:1px solid #aaa;height:7mm;width:100%;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BAG IDENTITY -->
+  <div style="display:flex;flex-direction:column;gap:2.5mm;flex-shrink:0;">
+    <div class="fg c4">
+      <div class="field"><label>Bag No.</label><div class="line"></div></div>
+      <div class="field"><label>Design ID</label><div class="line"></div></div>
+      <div class="field"><label>Order No.</label><div class="line"></div></div>
+      <div class="field"><label>Category</label><div class="line"></div></div>
+    </div>
+    <div class="fg c4">
+      <div class="field" style="grid-column:span 2;"><label>Customer Name</label><div class="line"></div></div>
+      <div class="field"><label>Metal Type</label><div class="line"></div></div>
+      <div class="field"><label>Purity / Alloy</label><div class="line"></div></div>
+    </div>
+    <div class="fg c4">
+      <div class="field"><label>Issued Weight (g)</label><div class="line"></div></div>
+      <div class="field"><label>No. of Pieces</label><div class="line"></div></div>
+      <div class="field"><label>Bag Created Date</label><div class="line"></div></div>
+      <div class="field"><label>Target Date</label><div class="line"></div></div>
+    </div>
+  </div>
+
+  <div class="div-solid"></div>
+
+  <!-- DEPARTMENT MOVEMENTS -->
+  <div class="sh"><div class="sh-title">Department Movements <span class="sh-sub">One row per issue / receive cycle — same department may repeat</span></div></div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:6mm;">#</th>
+        <th style="width:20mm;">Date Issued</th>
+        <th style="width:30mm;">Department</th>
+        <th style="width:28mm;">Karigar Name</th>
+        <th style="width:22mm;">Issued (g)</th>
+        <th style="width:22mm;">Date Received</th>
+        <th style="width:22mm;">Received (g)</th>
+        <th>Remarks</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="shaded">1</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">2</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">3</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">4</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">5</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">6</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">7</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">8</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">9</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">10</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">11</td><td></td><td></td><td></td><td class="tr"></td><td></td><td class="tr"></td><td></td></tr>
+      <tr class="trow">
+        <td colspan="4" style="text-align:right;font-size:8px;letter-spacing:1px;padding-right:3mm;">TOTALS →</td>
+        <td class="tr"></td><td></td><td class="tr"></td><td></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- EXTRA METAL -->
+  <div class="sh"><div class="sh-title">Extra Metal Record <span class="sh-sub">Additional metal issued to / returned from karigar</span></div></div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:6mm;">#</th>
+        <th style="width:20mm;">Date</th>
+        <th style="width:22mm;">Type (IN / OUT)</th>
+        <th style="width:28mm;">Karigar</th>
+        <th style="width:28mm;">Department</th>
+        <th style="width:22mm;">Weight (g)</th>
+        <th>Reason / Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="shaded">1</td><td></td><td class="tc"></td><td></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">2</td><td></td><td class="tc"></td><td></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">3</td><td></td><td class="tc"></td><td></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">4</td><td></td><td class="tc"></td><td></td><td></td><td class="tr"></td><td></td></tr>
+      <tr><td class="shaded">5</td><td></td><td class="tc"></td><td></td><td></td><td class="tr"></td><td></td></tr>
+    </tbody>
+  </table>
+
+  <!-- SUMMARY -->
+  <div class="sum-strip" style="grid-template-columns:repeat(3,1fr);">
+    <div class="sc"><div class="sl">Total Issued (g)</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Total Extra Metal OUT (g)</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Total Received (g)</div><div class="sv"></div></div>
+  </div>
+
+</div><!-- end page-a -->
+
+
+<!-- ════════════ SIDE B ════════════ -->
+<div class="page-b">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div>
+      <div class="sheet-title">Bag Movement Record</div>
+      <div class="sheet-subtitle">Stones · Delivery · Notes · Sign-off</div>
+    </div>
+    <div><div class="side-label">SIDE &nbsp; B</div></div>
+    <div style="text-align:right;">
+      <div class="sheet-no">SHEET NO. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+      <div class="fg c2" style="margin-top:2mm;">
+        <div class="field"><label>Bag No.</label><div class="line"></div></div>
+        <div class="field"><label>Design ID</label><div class="line"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STONE SECTION -->
+  <div class="sh"><div class="sh-title">Stone Record — Setting Department <span class="sh-sub">Per stone type · issued · set in jewellery · returned · broken</span></div></div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:6mm;">#</th>
+        <th style="width:24mm;">Stone Type</th>
+        <th style="width:19mm;">Date Issued</th>
+        <th style="width:24mm;">Issued To (Karigar)</th>
+        <th style="width:16mm;">Issued<br>Pcs</th>
+        <th style="width:16mm;">Issued<br>Carats</th>
+        <th style="width:16mm;">Set in<br>Jwlry Pcs</th>
+        <th style="width:16mm;">Returned<br>Pcs</th>
+        <th style="width:16mm;">Returned<br>Carats</th>
+        <th style="width:14mm;">Broken<br>Pcs</th>
+        <th>Remarks</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="shaded">1</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">2</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">3</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">4</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">5</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">6</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">7</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr class="trow">
+        <td colspan="4" style="text-align:right;font-size:8px;letter-spacing:1px;padding-right:3mm;">TOTALS →</td>
+        <td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- STONE SUMMARY -->
+  <div class="sum-strip" style="grid-template-columns:repeat(4,1fr);">
+    <div class="sc"><div class="sl">Stone Types</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Total Pcs Issued</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Total Carats Issued</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Total Pcs Broken</div><div class="sv"></div></div>
+  </div>
+
+  <div class="div-solid"></div>
+
+  <!-- CO DELIVERY -->
+  <div class="sh"><div class="sh-title">CO Delivery &amp; Receipt</div></div>
+  <div class="fg c5" style="flex-shrink:0;">
+    <div class="field"><label>Delivered Date</label><div class="line"></div></div>
+    <div class="field"><label>Delivered By (PM)</label><div class="line"></div></div>
+    <div class="field"><label>Received By (CO)</label><div class="line"></div></div>
+    <div class="field"><label>Final Net Wt (g)</label><div class="line"></div></div>
+    <div class="field"><label>Gross Wt (g)</label><div class="line"></div></div>
+  </div>
+
+  <div class="div-dash"></div>
+
+  <!-- GENERAL REMARKS -->
+  <div class="sh"><div class="sh-title">General Remarks / Notes</div></div>
+  <div class="rem">
+    <div class="rl"></div>
+    <div class="rl"></div>
+    <div class="rl"></div>
+    <div class="rl"></div>
+    <div class="rl"></div>
+    <div class="rl"></div>
+    <div class="rl"></div>
+  </div>
+
+  <!-- SIGNATURES -->
+  <div class="div-dash"></div>
+  <div class="sh" style="margin-bottom:2mm;"><div class="sh-title">Authorisation &amp; Sign-off</div></div>
+  <div class="fg c3" style="flex-shrink:0;">
+    <div class="field"><label>PM — Production Manager</label><div class="line-tall"></div></div>
+    <div class="field"><label>CO — Central Office</label><div class="line-tall"></div></div>
+    <div class="field"><label>Admin / Owner Verified</label><div class="line-tall"></div></div>
+  </div>
+
+  <!-- FINAL SUMMARY -->
+  <div class="sum-strip" style="grid-template-columns:repeat(4,1fr);">
+    <div class="sc"><div class="sl">Initial Issued (g)</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Extra Metal Total (g)</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Final Net Weight (g)</div><div class="sv"></div></div>
+    <div class="sc"><div class="sl">Completed Date</div><div class="sv"></div></div>
+  </div>
+
+</div><!-- end page-b -->
+
+<!-- AUTO NUMBERING -->
+<div class="no-print" style="position:fixed;top:12px;right:12px;background:#fff;border:2px solid #333;padding:12px 16px;font-family:'DM Sans',sans-serif;font-size:12px;z-index:100;display:flex;align-items:center;gap:12px;box-shadow:0 2px 12px rgba(0,0,0,0.15);">
+  <span style="font-weight:700;letter-spacing:1px;font-size:11px;">FROM</span>
+  <input id="start-no" type="number" min="1" value="1" style="width:55px;font-size:14px;font-weight:700;border:1.5px solid #999;padding:4px 6px;text-align:center;font-family:'Courier New',monospace;color:#cc0000;">
+  <span style="font-size:11px;color:#888;">×</span>
+  <input id="copies" type="number" min="1" max="50" value="1" style="width:50px;font-size:14px;border:1.5px solid #999;padding:4px 6px;text-align:center;font-family:'Courier New',monospace;">
+  <span style="font-size:10px;color:#888;">copies</span>
+  <button onclick="doPrint()" style="background:#111;color:#fff;border:none;padding:8px 18px;font-size:12px;cursor:pointer;letter-spacing:1px;font-family:'DM Sans',sans-serif;font-weight:600;">⎙ PRINT</button>
+  <span id="last-info" style="font-size:10px;color:#aaa;"></span>
+</div>
+
+<script>
+(function(){
+  var KEY = 'aurum_sheet_no';
+  var last = parseInt(localStorage.getItem(KEY)||'0');
+  document.getElementById('start-no').value = last + 1;
+  if(last > 0) document.getElementById('last-info').textContent = 'Last: ' + pad(last);
+
+  function pad(n){ return n < 10 ? '0'+n : ''+n; }
+
+  window.doPrint = function(){
+    var start = parseInt(document.getElementById('start-no').value)||1;
+    var cnt   = parseInt(document.getElementById('copies').value)||1;
+    var last  = start + cnt - 1;
+
+    var pageA = document.querySelector('.page-a').outerHTML;
+    var pageB = document.querySelector('.page-b').outerHTML;
+    var style = document.querySelector('style').outerHTML;
+
+    var pages = '';
+    for(var i=0;i<cnt;i++){
+      var no = pad(start + i);
+      var a = pageA.replace(/SHEET NO\\. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/g, 'SHEET NO. ' + no);
+      var b = pageB.replace(/SHEET NO\\. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/g, 'SHEET NO. ' + no);
+      pages += a + b;
+    }
+
+    localStorage.setItem(KEY, last);
+    document.getElementById('last-info').textContent = 'Last: ' + pad(last);
+    document.getElementById('start-no').value = last + 1;
+
+    var w = window.open('','_blank');
+    w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8">'+style+'<style>@media print{.no-print{display:none!important;}@page{size:A4;margin:0;}body{margin:0;}}</style></head><body>'+pages+'</body></html>');
+    w.document.close();
+    w.onload = function(){ w.print(); };
+    setTimeout(function(){ if(!w.closed) w.print(); }, 1200);
+  };
+})();
+</script>
+
+</body>
+</html>
+`;
+
+// ============================================================
+// PRINT SHEETS VIEW — Bag Movement Record sheets
+// ============================================================
+function PrintSheetsView() {
+  const [startNo, setStartNo]   = React.useState(()=>{ try{ return parseInt(localStorage.getItem("aurum_sheet_no")||"0")+1; }catch(e){ return 1; }});
+  const [copies,  setCopies]    = React.useState(1);
+  const [lastUsed, setLastUsed] = React.useState(()=>{ try{ return parseInt(localStorage.getItem("aurum_sheet_no")||"0"); }catch(e){ return 0; }});
+
+  function pad(n){ return n < 10 ? "0"+n : ""+n; }
+
+  function handlePrint() {
+    const start = parseInt(startNo)||1;
+    const cnt   = parseInt(copies)||1;
+    const last  = start + cnt - 1;
+    const PLACEHOLDER = "SHEET NO. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;";
+
+    const styleEl = document.createElement("div");
+    styleEl.innerHTML = `<iframe id="sheet-frame" src="SHEET_HTML_URL" style="display:none"></iframe>`;
+
+    // Build pages from the live DOM
+    const pageA = document.querySelector ? null : null; // not available in worker
+
+    // Use stored HTML string
+    const htmlStr = _SHEET_HTML;
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(htmlStr, "text/html");
+    const styleContent = doc.querySelector("style") ? doc.querySelector("style").textContent : "";
+    const pageAEl = doc.querySelector(".page-a");
+    const pageBEl = doc.querySelector(".page-b");
+
+    let pages = "";
+    for(let i=0;i<cnt;i++){
+      const no = pad(start+i);
+      if(pageAEl && pageBEl){
+        let aHtml = pageAEl.outerHTML.split(PLACEHOLDER).join("SHEET NO. "+no);
+        let bHtml = pageBEl.outerHTML.split(PLACEHOLDER).join("SHEET NO. "+no);
+        pages += aHtml + bHtml;
+      }
+    }
+
+    try{ localStorage.setItem("aurum_sheet_no", last); }catch(e){}
+    setLastUsed(last);
+    setStartNo(last+1);
+
+    const w = window.open("","_blank");
+    w.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><style>"+styleContent+"@media print{.no-print{display:none!important;}@page{size:A4;margin:0;}body{margin:0;}}</style></head><body>"+pages+"</body></html>");
+    w.document.close();
+    setTimeout(()=>{ w.print(); }, 1200);
+  }
+
+  return (
+    <div style={{ padding:"32px 40px", maxWidth:"600px" }}>
+      <div style={{ fontSize:"11px", letterSpacing:"3px", color:"var(--gold-dim)", textTransform:"uppercase", marginBottom:"8px" }}>Production</div>
+      <div style={{ fontSize:"22px", fontWeight:"700", letterSpacing:"1px", color:"var(--gold)", marginBottom:"6px" }}>Print Bag Movement Sheets</div>
+      <div style={{ fontSize:"12px", color:"var(--text-dim)", marginBottom:"32px" }}>Double-sided A4 sheets for manual data entry. Sheet numbers in red. Print and file by sheet number.</div>
+      <div style={{ background:"var(--dark2)", border:"1px solid var(--dark4)", borderRadius:"8px", padding:"24px 28px", display:"flex", flexDirection:"column", gap:"20px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:"16px" }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:"10px", fontWeight:"600", letterSpacing:"1px", color:"var(--gold-dim)", textTransform:"uppercase", marginBottom:"8px" }}>Starting Sheet Number</div>
+            <input type="number" min="1" value={startNo} onChange={e=>setStartNo(e.target.value)}
+              style={{ width:"100%", fontSize:"20px", fontFamily:"'Courier New',monospace", fontWeight:"700", padding:"8px 12px",
+                background:"var(--dark)", border:"2px solid #cc0000", color:"#cc0000", borderRadius:"4px", textAlign:"center" }} />
+            {lastUsed > 0 && <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"6px" }}>Last session ended at: <strong style={{color:"var(--text-secondary)"}}>Sheet {pad(lastUsed)}</strong></div>}
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:"10px", fontWeight:"600", letterSpacing:"1px", color:"var(--gold-dim)", textTransform:"uppercase", marginBottom:"8px" }}>Number of Copies</div>
+            <input type="number" min="1" max="50" value={copies} onChange={e=>setCopies(e.target.value)}
+              style={{ width:"100%", fontSize:"20px", fontFamily:"'Courier New',monospace", fontWeight:"700", padding:"8px 12px",
+                background:"var(--dark)", border:"1px solid var(--dark4)", color:"var(--text)", borderRadius:"4px", textAlign:"center" }} />
+            <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"6px" }}>
+              Sheets {pad(parseInt(startNo)||1)} to {pad((parseInt(startNo)||1)+(parseInt(copies)||1)-1)}
+            </div>
+          </div>
+        </div>
+        <button onClick={handlePrint} style={{
+          background:"var(--gold)", color:"#000", border:"none", padding:"13px 28px",
+          fontSize:"13px", fontWeight:"700", letterSpacing:"1.5px", textTransform:"uppercase",
+          cursor:"pointer", borderRadius:"4px", width:"100%",
+        }}>⎙ &nbsp; Open Print Preview</button>
+        <div style={{ borderTop:"1px solid var(--dark4)", paddingTop:"16px" }}>
+          <div style={{ fontSize:"10px", fontWeight:"600", letterSpacing:"1px", color:"var(--text-dim)", textTransform:"uppercase", marginBottom:"8px" }}>Instructions</div>
+          <div style={{ fontSize:"11px", color:"var(--text-dim)", lineHeight:"2" }}>
+            1. Set starting sheet number and copies<br/>
+            2. Click Open Print Preview — a new window opens<br/>
+            3. Print: Paper A4 · Margins None · Double-sided · Background graphics ON<br/>
+            4. Sheet numbers in red are remembered for next session
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
-function Dashboard({ db }) {
+function Dashboard({ db, onBagClick }) {
   const [period, setPeriod] = useState("month"); // week | month | fy
 
   // ── Date helpers ─────────────────────────────────────────────────────────
@@ -2870,13 +3450,168 @@ function Dashboard({ db }) {
           )}
         </div>
       </div>
+      <ProductionStrip db={db} onBagClick={onBagClick} />
     </div>
   );
 }
 
-
 // ============================================================
-// PM BOOK VIEW — Production Manager's Unified Metal Ledger
+// PRODUCTION STRIP — Live marquee of in-process bags
+// ============================================================
+function ProductionStrip({ db, onBagClick }) {
+  const [speed, setSpeed] = useState(40); // seconds per loop
+  const [paused, setPaused] = useState(false);
+
+  const bags = (db.bags||[])
+    .filter(b => b.status === "In Process" && !b.isBroken)
+    .sort((a,b) => (a.createdAt||"").localeCompare(b.createdAt||""));
+
+  if(bags.length === 0) return null;
+
+  // Build items — each bag is one card
+  const items = bags.map(bag => {
+    const design = (db.designMaster||[]).find(d => d.id === bag.designId);
+    const photo = design?.photos?.[0] || design?.photo || null;
+    return { bag, photo };
+  });
+
+  // Duplicate for seamless loop
+  const doubled = [...items, ...items];
+
+  const animDuration = `${speed}s`;
+
+  return (
+    <div style={{
+      marginTop: "18px",
+      background: "var(--dark3)",
+      borderTop: "1px solid var(--dark4)",
+      borderBottom: "1px solid var(--dark4)",
+      borderRadius: "var(--radius)",
+      overflow: "hidden",
+      position: "relative",
+    }}>
+      {/* Header bar */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"6px 14px", borderBottom:"1px solid var(--dark4)" }}>
+        <div style={{ fontSize:"10px", letterSpacing:"3px", color:"var(--gold-dim)", fontWeight:"bold" }}>
+          ⬡ PRODUCTION — {bags.length} BAG{bags.length!==1?"S":""} IN PROCESS
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
+          <span style={{ fontSize:"10px", color:"var(--text-dim)" }}>Speed:</span>
+          <input type="range" min={15} max={90} step={5} value={speed}
+            onChange={e=>setSpeed(Number(e.target.value))}
+            style={{ width:"80px", accentColor:"var(--gold)", cursor:"pointer" }} />
+          <span style={{ fontSize:"10px", color:"var(--text-dim)", width:"30px" }}>
+            {speed<=20?"Fast":speed<=50?"Med":"Slow"}
+          </span>
+        </div>
+      </div>
+
+      {/* Marquee track */}
+      <div
+        onMouseEnter={()=>setPaused(true)}
+        onMouseLeave={()=>setPaused(false)}
+        style={{ overflow:"hidden", padding:"8px 0" }}>
+        <style>{`
+          @keyframes marqueeScroll {
+            0%   { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+          }
+          .production-track {
+            display: flex;
+            gap: 10px;
+            width: max-content;
+            animation: marqueeScroll ${animDuration} linear infinite;
+          }
+          .production-track.paused {
+            animation-play-state: paused;
+          }
+          .prod-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 90px;
+            cursor: pointer;
+            padding: 4px 6px;
+            border-radius: 4px;
+            transition: background 0.15s;
+            flex-shrink: 0;
+          }
+          .prod-card:hover {
+            background: rgba(212,168,67,0.1);
+          }
+          .prod-card .design-id {
+            font-size: 9px;
+            color: var(--gold);
+            font-family: 'Courier New', monospace;
+            letter-spacing: 0.5px;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            width: 86px;
+            margin-bottom: 3px;
+          }
+          .prod-card .photo-wrap {
+            width: 72px;
+            height: 72px;
+            border-radius: 4px;
+            overflow: hidden;
+            border: 1px solid var(--dark5);
+            background: var(--dark2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+          }
+          .prod-card .photo-wrap img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+          }
+          .prod-card .no-photo {
+            font-size: 22px;
+            opacity: 0.3;
+          }
+          .prod-card .bag-no {
+            font-size: 9px;
+            color: var(--text-secondary);
+            font-family: 'Courier New', monospace;
+            margin-top: 3px;
+            text-align: center;
+          }
+          .prod-card .dept-label {
+            font-size: 8px;
+            color: var(--text-dim);
+            text-align: center;
+            margin-top: 1px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            width: 86px;
+          }
+        `}</style>
+
+        <div className={`production-track${paused?" paused":""}`}>
+          {doubled.map(({ bag, photo }, i) => (
+            <div key={`${bag.id}-${i}`} className="prod-card"
+              onClick={()=>onBagClick && onBagClick(bag.id)}
+              title={`${bag.designId||bag.id} — ${bag.currentDept||""}`}>
+              <div className="design-id">{bag.designId||"—"}</div>
+              <div className="photo-wrap">
+                {photo
+                  ? <img src={photo} alt={bag.designId} onError={e=>{ e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }} />
+                  : null}
+                <div className="no-photo" style={{ display: photo ? "none" : "flex" }}>⬡</div>
+              </div>
+              <div className="bag-no">{bag.id}</div>
+              <div className="dept-label">{bag.currentDept||"PM"}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 // ============================================================
 function PMBookView({ db, updateDB, user }) {
   const [filterPurity, setFilterPurity] = useState("All");
@@ -5919,7 +6654,7 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
     </div>
   );
 }
-function BagsView({ db, updateDB, setModal, user, goToBagMovement }) {
+function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId, onInitialBagConsumed }) {
   const [stickerBag, setStickerBag] = useState(null);
   const [stickerQueue, setStickerQueue] = useState([]); // batch print queue
   const [showBatchPrint, setShowBatchPrint] = useState(false);  // quick-print sticker
@@ -5928,6 +6663,14 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement }) {
   const [fltMetal,    setFltMetal]    = useState("All");
   const [fltPurity,   setFltPurity]   = useState("All");
   const [fltCategory, setFltCategory] = useState("All");
+
+  // Highlight bag when navigated from production strip or elsewhere
+  useEffect(()=>{
+    if(!initialBagId) return;
+    setSearch(initialBagId);
+    setBagSubTab("bags");
+    if(onInitialBagConsumed) onInitialBagConsumed();
+  }, [initialBagId]);
   const [fltStatus,   setFltStatus]   = useState("All");
   const [fltDept,     setFltDept]     = useState("All");
   const [fltCustomer, setFltCustomer] = useState("");
@@ -8560,6 +9303,169 @@ The receipt can then be re-entered correctly.`;
 // ============================================================
 // MOVEMENT VIEW
 // ============================================================
+// ============================================================
+// BAG JOURNEY MAP — Vertical timeline in 3rd column
+// ============================================================
+function BagJourneyMap({ bag, db }) {
+  const DEPT_COLORS = {
+    "Production Manager": { border:"#c8a850", text:"#c8a850", dot:"#c8a850", bg:"rgba(200,168,80,0.06)" },
+    "Central Office":     { border:"#4a9eda", text:"#4a9eda", dot:"#4a9eda", bg:"rgba(74,158,218,0.06)" },
+    "Filing":             { border:"#c8960a", text:"#d4a820", dot:"#c8960a", bg:"rgba(200,150,10,0.06)"  },
+    "Setting":            { border:"#9b59b6", text:"#b07ad0", dot:"#9b59b6", bg:"rgba(155,89,182,0.06)" },
+    "Pre-Polishing":      { border:"#1abc9c", text:"#2dd4bf", dot:"#1abc9c", bg:"rgba(26,188,156,0.06)" },
+    "Final Polishing":    { border:"#16a085", text:"#1fc8a8", dot:"#16a085", bg:"rgba(22,160,133,0.06)" },
+    "Quality Control":    { border:"#27ae60", text:"#4db88a", dot:"#27ae60", bg:"rgba(39,174,96,0.06)"  },
+    "Rhodium / Plating":  { border:"#a0a020", text:"#c0c040", dot:"#a0a020", bg:"rgba(160,160,32,0.06)" },
+  };
+  const getColor = (dept) => DEPT_COLORS[dept] || { border:"#444", text:"#888", dot:"#444", bg:"rgba(80,80,80,0.04)" };
+
+  const PROD_MGR = "Production Manager";
+  const CO       = "Central Office";
+
+  const txs = (db.transactions||[])
+    .filter(t => t.bagNo === bag.id && !t.groupLabel &&
+      (t.type==="INITIAL_ISSUE"||t.type==="TRANSFER"||t.type==="REUNION"))
+    .sort((a,b)=>(a.timestamp||a.date||"").localeCompare(b.timestamp||b.date||""));
+
+  const steps = [];
+
+  // First node — CO issued
+  steps.push({
+    id:"start", dept:CO, label:"CO",
+    sublabel:"Issued", weight:fmtW(bag.netMetalWeight||bag.currentWeight||0),
+    done:true, isCO:true,
+  });
+
+  txs.forEach(t => {
+    const issued = parseFloat(t.issuedWeight)||0;
+    const recv   = t.receivedWeight!=null ? parseFloat(t.receivedWeight) : null;
+    const loss   = recv!=null ? round3(issued-(recv)-(parseFloat(t.recoveryWeight)||0)) : null;
+    const karName = t.karigarId ? ((db.karigars||[]).find(k=>k.id===t.karigarId)?.name||"") : "";
+    const shortLabel = (t.toDept||"")
+      .replace("Production Manager","PM")
+      .replace("Central Office", recv!=null ? "CO" : "→ CO")
+      .replace("Pre-Polishing","Pre-Polish")
+      .replace("Final Polishing","Fin. Polish")
+      .replace("Quality Control","QC")
+      .replace("Rhodium / Plating","Rhodium");
+    steps.push({
+      id:t.id, dept:t.toDept, label:shortLabel,
+      sublabel: t.toDept===CO && recv==null ? "Awaiting receipt" : karName,
+      issuedWeight:fmtW(issued),
+      receivedWeight:recv!=null?fmtW(recv):null,
+      loss: loss!=null&&loss>0.0005 ? fmtW(loss) : loss!=null&&recv!=null ? "0" : null,
+      lossPositive: loss!=null&&loss>0.0005,
+      done:recv!=null, current:recv==null,
+    });
+  });
+
+  // Final CO node if completed
+  if(bag.status==="Completed") {
+    steps.push({ id:"end", dept:CO, label:"CO", sublabel:"Received", done:true, isFinal:true });
+  }
+
+  if(steps.length <= 1) return null;
+
+  return (
+    <div style={{
+      background:"var(--dark2)",
+      border:"1px solid var(--dark4)",
+      borderRadius:"var(--radius)",
+      padding:"14px 14px",
+      position:"sticky", top:"12px",
+    }}>
+      <style>{`
+        @keyframes jPulse {
+          0%,100%{ box-shadow:0 0 0 0 rgba(200,168,80,0.5); }
+          50%     { box-shadow:0 0 0 6px rgba(200,168,80,0); }
+        }
+        .j-pulse { animation: jPulse 1.8s ease-in-out infinite; }
+      `}</style>
+
+      {/* Title */}
+      <div style={{ fontSize:"9px", letterSpacing:"2px", color:"var(--gold-dim)", textTransform:"uppercase", marginBottom:"12px", fontWeight:"700" }}>
+        Journey
+      </div>
+
+      {/* Steps */}
+      <div style={{ display:"flex", flexDirection:"column", gap:"0" }}>
+        {steps.map((step, i) => {
+          const col = getColor(step.dept);
+          const isLast = i === steps.length - 1;
+          return (
+            <div key={step.id} style={{ display:"flex", gap:"0", alignItems:"stretch" }}>
+
+              {/* Left: line + dot */}
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", width:"20px", flexShrink:0 }}>
+                {/* top line */}
+                <div style={{ width:"1.5px", height: i===0?"10px":"0", background:"transparent" }}></div>
+                {/* dot */}
+                <div
+                  className={step.current ? "j-pulse" : ""}
+                  style={{
+                    width: step.current ? "14px" : "10px",
+                    height: step.current ? "14px" : "10px",
+                    borderRadius:"50%",
+                    background: step.done ? col.dot : step.current ? col.dot : "var(--dark4)",
+                    border: `2px solid ${step.done||step.current ? col.dot : "#333"}`,
+                    flexShrink:0,
+                    opacity: (!step.done && !step.current) ? 0.35 : 1,
+                    zIndex:1,
+                  }}
+                />
+                {/* bottom line */}
+                {!isLast && (
+                  <div style={{
+                    width:"1.5px", flex:1, minHeight:"28px",
+                    background: step.done ? "linear-gradient(#4db88a44,#4db88a22)" : "var(--dark4)",
+                    margin:"2px 0",
+                  }}></div>
+                )}
+              </div>
+
+              {/* Right: content */}
+              <div style={{ flex:1, paddingLeft:"10px", paddingBottom: isLast?"6px":"16px", paddingTop:"0", opacity:(!step.done&&!step.current)?0.4:1 }}>
+                {/* Dept label */}
+                <div style={{ display:"flex", alignItems:"center", gap:"5px" }}>
+                  <span style={{ fontSize:"12px", fontWeight:"700", color: step.done||step.current ? col.text : "#555" }}>
+                    {step.label}
+                  </span>
+                  {step.done && <span style={{ fontSize:"9px", color:"#4db88a" }}>✓</span>}
+                  {step.current && <span style={{ fontSize:"9px", color:col.text }}>●</span>}
+                </div>
+
+                {/* Karigar */}
+                {step.sublabel && (
+                  <div style={{ fontSize:"10px", color:"var(--text-dim)", lineHeight:"1.4", marginTop:"2px" }}>
+                    {step.sublabel}
+                  </div>
+                )}
+
+                {/* Weights */}
+                {(step.issuedWeight||step.receivedWeight) && (
+                  <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"3px", fontFamily:"'Courier New',monospace" }}>
+                    {step.issuedWeight && <span>↓{step.issuedWeight}</span>}
+                    {step.receivedWeight && <span style={{ marginLeft:"4px" }}>↑{step.receivedWeight}</span>}
+                  </div>
+                )}
+
+                {/* Loss */}
+                {step.loss!=null && (
+                  <div style={{ fontSize:"10px", marginTop:"2px", fontFamily:"'Courier New',monospace", color: step.lossPositive?"#e07070":"#4db88a" }}>
+                    {step.lossPositive ? "−"+step.loss : "✓ 0"}
+                  </div>
+                )}
+              </div>
+
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
 function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }) {
   const noEdit = user?.noEdit === true;
   const [movTab, setMovTab] = useState("movement"); // "movement" | "pm_deliver"
@@ -8827,6 +9733,11 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
           const last = openTxs[openTxs.length-1];
           prev.transactions[last.i].issuedWeight = (prev.transactions[last.i].issuedWeight||0) + wt;
         }
+        // Also update the group's currentWeight so display shows correct total
+        if(entity==="group" && group?.label) {
+          const grpIdx = (prev.groups||[]).findIndex(g=>g.bagId===b.id && g.label===group.label);
+          if(grpIdx>=0) prev.groups[grpIdx].currentWeight = round3((prev.groups[grpIdx].currentWeight||0) + wt);
+        }
       }
       // Debit CO Alloyed Stock — extra metal issued to bag
       if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
@@ -8882,11 +9793,18 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
           );
         }
       } else {
-        if(recv > currentIssuedWeight + 0.001) {
+        // Extra metal issued to this bag/group for this leg
+        const extraForThisLeg = (db.extraMetalIssues||[]).filter(e=>
+          e.bagId===(entity==="bag"?selectedBagId:group?.bagId) &&
+          (entity==="group" ? (e.groupLabel===currentGroupLabel || !e.groupLabel) : !e.groupLabel)
+        ).reduce((s,e)=>s+(e.weight||0), 0);
+        const maxReceivable = round3(currentIssuedWeight + extraForThisLeg);
+        if(recv > maxReceivable + 0.001) {
           // Hard block — metal weight can never increase in production
           return showToast(
             "❌ Cannot receive more than issued weight.\n\n" +
-            "Issued: " + fmtW(currentIssuedWeight) + "\n" +
+            "Issued: " + fmtW(currentIssuedWeight) +
+            (extraForThisLeg>0 ? " + Extra: " + fmtW(extraForThisLeg) + " = " + fmtW(maxReceivable) : "") + "\n" +
             "Entered: " + fmtW(recv) + "\n\n" +
             "Metal weight cannot increase in production. Please recheck the weight on the scale."
           );
@@ -9160,8 +10078,8 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
       (visit.stones||[]).forEach(s=>{
         const t = s.stoneType||"Stone";
         if(!byType[t]) byType[t]={ issued:0, issuedPcs:0 };
-        byType[t].issued    += s.netCarats||0;
-        byType[t].issuedPcs += s.netPieces||0;
+        byType[t].issued    += s.netCarats||s.carats||0;
+        byType[t].issuedPcs += s.netPieces||s.pieces||s.issuedPcs||0;
       });
     });
     // Build form with one row per stone type
@@ -9644,7 +10562,7 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
         <button className={`btn ${entity==="group"?"btn-gold":""}`} onClick={()=>{ setEntity("group"); setSelectedBagId(""); setSelectedGroupId(""); setMode("receive"); }}>⊞ Group</button>
       </div>
 
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"16px" }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 0.85fr 240px", gap:"16px", alignItems:"start" }}>
         {/* LEFT: Selector + Status */}
         <div>
           <div className="card card-gold" style={{ marginBottom:"12px" }}>
@@ -9803,6 +10721,9 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
             </div>
           )}
         </div>
+
+
+
 
         {/* RIGHT: Action form */}
         <div>
@@ -10202,13 +11123,29 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
               {/* Show selected karigar's current workload */}
               {issueForm.karigarId && (()=>{
                 const k = db.karigars.find(x=>x.id===issueForm.karigarId);
-                const activeBags = db.transactions.filter(t=>t.karigarId===issueForm.karigarId && t.receivedWeight==null && t.type==="TRANSFER");
+                const activeBags = db.transactions.filter(t=>
+                  t.karigarId===issueForm.karigarId &&
+                  t.receivedWeight==null &&
+                  (t.type==="TRANSFER" || t.type==="BREAK_ISSUE")
+                );
+                // Also count active split groups directly
+                const activeGroups = (db.groups||[]).filter(g=>
+                  g.currentKarigarId===issueForm.karigarId &&
+                  g.status==="In Process" && !g.isMerged
+                );
+                const totalActive = activeBags.length + (activeGroups.length > activeBags.length ? activeGroups.length - activeBags.length : 0);
+                const bagLabels = [...new Set([
+                  ...activeBags.map(t=>t.bagNo+(t.groupLabel?` (${t.groupLabel})`:"")).filter(Boolean),
+                  ...activeGroups
+                    .filter(g=>!activeBags.some(t=>t.bagNo===g.bagId&&t.groupLabel===g.label))
+                    .map(g=>g.bagId+(g.label?` (${g.label})`:"")),
+                ])];
                 return (
                   <div style={{ background:"var(--dark3)", border:"1px solid var(--dark4)", borderRadius:"2px", padding:"8px 12px", marginBottom:"12px", fontSize:"11px" }}>
                     <span style={{ color:"var(--gold)" }}>{k?.name}</span>
                     <span style={{ color:"var(--gold-dim)", marginLeft:"8px" }}>
-                      Currently working on: <strong style={{ color: activeBags.length>0?"#e0903a":"#4db88a" }}>{activeBags.length} active bag{activeBags.length!==1?"s":""}</strong>
-                      {activeBags.length>0 && " — "+activeBags.map(t=>t.bagNo).join(", ")}
+                      Currently working on: <strong style={{ color: bagLabels.length>0?"#e0903a":"#4db88a" }}>{bagLabels.length} active bag{bagLabels.length!==1?"s":""}</strong>
+                      {bagLabels.length>0 && " — "+bagLabels.join(", ")}
                     </span>
                   </div>
                 );
@@ -10466,6 +11403,8 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
             </div>
           )}
         </div>
+        {/* COLUMN 3: Journey Map */}
+        {entity==="bag" && bag && <BagJourneyMap bag={bag} db={db} />}
       </div>
     </div>
       )}
@@ -17714,10 +18653,11 @@ function MonthlyProductionReport({ db }) {
 
 // ── Music Player ─────────────────────────────────────────────
 const STATIONS = [
-  { name:"Groove Salad",  url:"https://ice2.somafm.com/groovesalad-128-mp3", desc:"Ambient / Chillout" },
-  { name:"Drone Zone",    url:"https://ice2.somafm.com/dronezone-128-mp3",   desc:"Deep Ambient" },
-  { name:"Cliqhop",       url:"https://ice2.somafm.com/cliqhop-128-mp3",     desc:"Electronic Instrumental" },
-  { name:"DEF CON Radio", url:"https://ice2.somafm.com/defcon-128-mp3",      desc:"Eclectic / Work" },
+  { name:"Groove Salad",    url:"https://ice2.somafm.com/groovesalad-128-mp3", desc:"Ambient / Chillout" },
+  { name:"Drone Zone",      url:"https://ice2.somafm.com/dronezone-128-mp3",   desc:"Deep Ambient" },
+  { name:"Cliqhop",         url:"https://ice2.somafm.com/cliqhop-128-mp3",     desc:"Electronic Instrumental" },
+  { name:"DEF CON Radio",   url:"https://ice2.somafm.com/defcon-128-mp3",      desc:"Eclectic / Work" },
+  { name:"Suburbs of Goa",  url:"https://ice2.somafm.com/suburbsofgoa-128-mp3", desc:"Desi / Indian Beats" },
 ];
 function MusicPlayer() {
   const [playing,  setPlaying]  = React.useState(false);

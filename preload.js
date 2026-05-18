@@ -72,6 +72,11 @@ contextBridge.exposeInMainWorld('aurum', {
     close:       () => ipcRenderer.invoke('window:close'),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
   },
+  help: {
+    captureScreen:  ()        => ipcRenderer.invoke('help:captureScreen'),
+    saveScreenshot: (dataUrl) => ipcRenderer.invoke('help:saveScreenshot', dataUrl),
+    openWhatsApp:   (message) => ipcRenderer.invoke('help:openWhatsApp', message),
+  },
   on: (channel, fn) => {
     const sub = (_, ...args) => fn(...args);
     ipcRenderer.on(channel, sub);

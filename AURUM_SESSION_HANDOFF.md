@@ -1,7 +1,7 @@
 # AURUM PROJECT — SESSION HANDOFF DOCUMENT
-**For: Next Claude session (Aurum 4)**
-**Written by: Claude (Aurum 3 session)**
-**Date: 10 May 2026**
+**For: Next Claude session (Aurum 5)**
+**Written by: Claude (Aurum 4 session)**
+**Date: 18 May 2026**
 **Client: Digant Toshniwal, Delhi**
 **Company: Brasilgo Jewels Private Limited & Nimbark Jewels**
 
@@ -28,33 +28,26 @@
 ## 2. THE THREE APPS
 
 ### A) AUD — AURUM Desktop
-- **What:** Full jewellery production management system
 - **Tech:** Electron 29 + React 18 + Vite 5 + Express.js
 - **Location:** `D:\Aurum\aurum-desktop\`
 - **Data:** `%APPDATA%\aurum\data\[company]\aurum-data.json`
 - **Build:** Right-click `build-aurum.bat` → Run as Administrator
-- **Runs on:** Server PC (Windows 10)
 - **LAN server:** Port 3737 (HTTP)
-- **package.json name:** `"aurum"` (critical — determines userData path)
-- **MainApp.jsx:** ~19,035 lines (cleaned in Aurum 3)
+- **package.json name:** `"aurum"` (critical)
+- **MainApp.jsx:** ~19,975 lines (as of Aurum 4 session end)
 
 ### B) AUB — AURUM Business
-- **What:** Financial management companion to AUD (invoicing, ledger, payments)
 - **Tech:** Electron 28 + React 18 + Vite 5
 - **Location:** `D:\Aurum\aurum-business\`
 - **Data:** `%APPDATA%\aurum-business\aurum-business.dat` (AES-256-GCM encrypted)
-- **Auth:** `%APPDATA%\aurum-business\aurum-business-auth.json`
 - **Port:** 3738
-- **Users:** Admin and CO only
-- **AUB App.jsx:** ~4,909 lines
+- **App.jsx:** ~4,989 lines (as of Aurum 4 session end)
 
 ### C) AUL — AURUM Lite
-- **What:** Android mobile app for PM/DM on shop floor
 - **Tech:** React Native + Expo SDK 54
 - **Location:** `D:\Aurum\aurum-lite\`
 - **Build:** `eas build -p android --profile preview`
-- **Expo account:** digant-brasilgo (Google login)
-- **Current APK version:** 1.0.4 (icon + connection fix)
+- **Current APK version:** 1.0.4
 
 ---
 
@@ -66,9 +59,8 @@
 - **AURUM data path:** `C:\Users\Server\AppData\Roaming\aurum\`
 
 ### Router
-- **Brand:** ZTE (model F670LV9.0)
-- **Admin URL:** `192.168.1.1`
-- **Firewall Level:** Middle
+- **Brand:** ZTE (model F670LV9.0) — keep this router when moving office
+- **Admin URL:** `192.168.1.1` · **Firewall Level:** Middle
 
 ### WiFi Networks
 | SSID | Purpose | Internet |
@@ -76,18 +68,14 @@
 | JGPL Connect (SSID1) | Main office WiFi | Yes |
 | AURUM-FLOOR (SSID3) | PM/DM phones only | Blocked |
 
-### AURUM-FLOOR Setup
-- SSID Isolation: On (fine — does not block phone→server LAN)
-- **Password: `aurum2026`**
-- **Parental Control: `Ban Internet Access`** ⚠️ Never change to URL Whitelist — blocks port 3737
+- **AURUM-FLOOR Password:** `aurum2026`
+- **Parental Control: `Ban Internet Access`** ⚠️ Never URL Whitelist — blocks port 3737
+- **PM Phone MAC:** `3c:a8:0a:03:d1:8d` · Fixed IP: `192.168.1.100`
+- **Windows Firewall Rule:** AURUM, Direction=In, Protocol=Any, Action=Allow
 
-### PM Phone
-- **MAC:** `3c:a8:0a:03:d1:8d`
-- **Fixed IP:** `192.168.1.100`
-- When reconnecting: forget → reconnect → Advanced → Device MAC → "Stay Connected"
-
-### Windows Firewall
-- Rule name: AURUM, Direction=In, Protocol=Any, Action=Allow
+### Moving Office
+- Keep same ZTE router → no changes needed when moving to new city/ISP
+- If router ever changed: reconfigure static IP (192.168.1.7), PM phone MAC binding, AURUM-FLOOR SSID + parental control
 
 ---
 
@@ -98,9 +86,7 @@
 | brasilgo | Brasilgo Jewels Private Limited | `%APPDATA%\aurum\data\brasilgo\aurum-data.json` |
 | nimbark | Nimbark Jewels | `%APPDATA%\aurum\data\nimbark\aurum-data.json` |
 
-- Company registry: `%APPDATA%\aurum\aurum-companies.json`
-- Users: `%APPDATA%\aurum\aurum-users.json`
-- Roles: admin, co, production_manager, data_manager
+- Multiple PM users supported — each unique username/password, same role
 
 ---
 
@@ -109,155 +95,167 @@
 ### AUD
 ```
 D:\Aurum\aurum-desktop\
-  main.js                ← Express server + safety checks + price fetching
-  preload.js             ← Electron IPC bridge (exposes window.aurum)
-  vite.config.js         ← Minimal safe config (base: './', outDir: 'dist')
+  main.js        ← Express server + IPC handlers + help/screenshot + aub-connect
+  preload.js     ← Electron IPC bridge (exposes window.aurum incl. help.*)
   src\
-    MainApp.jsx          ← ALL views (~19,035 lines)
-    AurumApp.jsx         ← Root, auth, theme, company switching
-    UserManagement.jsx   ← User admin with admin password reset
+    MainApp.jsx  ← ALL views (~19,975 lines)
+    AurumApp.jsx ← Root, auth, theme
+    UserManagement.jsx ← User admin + admin password reset
 ```
 
 ### AUB
 ```
 D:\Aurum\aurum-business\
-  electron.js            ← Encrypted data handling
-  src\App.jsx            ← ALL views (~4,909 lines)
-```
-
-### AUL
-```
-D:\Aurum\aurum-lite\
-  app.json               ← version 1.0.4, versionCode 4
-  assets\icon.png        ← AURUM Lite logo 1024x1024
-  src\utils\api.js       ← 3000ms timeout, isCheckingRef guard
-  src\screens\LoginScreen.js
-```
-
-### Backups
-```
-%APPDATA%\aurum\data\brasilgo\backups\   ← Hourly, keep 30
-G:\Aurum\backups\brasilgo\
-G:\Aurum\aurum-desktop\                  ← Source backup (xcopy)
-G:\Aurum\aurum-lite\
-G:\Aurum\aurum-business\
-D:\Aurum\aurum-desktop\src\MainApp.jsx.bak  ← Always keep before replacing!
+  electron.js    ← Auth + displayName support
+  src\App.jsx    ← ALL views (~4,989 lines)
 ```
 
 ### GitHub
 ```
 https://github.com/digant-brasilgo/aurum-desktop
-Push command: cd /d D:\Aurum\aurum-desktop && git add . && git commit -m "..." && git push
+Push: cd /d D:\Aurum\aurum-desktop && git add . && git commit -m "..." && git push
 ```
 
 ---
 
-## 6. EXTERNAL APIs USED IN AUD
+## 6. EXTERNAL APIs
 
-All keys stored in AUD Settings (not hardcoded):
+| API | Purpose | Account needed |
+|-----|---------|---------------|
+| metalpriceapi.com | Live gold/silver (primary) | Yes — paid |
+| metals.dev | Live gold/silver (fallback) | Yes — paid |
+| fawazahmed0 CDN | Free metals/currency (fallback) | No |
+| gold-api.com | Free gold price (fallback) | No |
+| frankfurter.app | Free USD→INR rate | No |
+| news.google.com RSS | Jewellery news ticker | No |
+| SomaFM (ice2.somafm.com) | Background music — 5 channels | No — free, voluntary donation |
 
-| API | Purpose | Account needed | Key field in Settings |
-|-----|---------|---------------|----------------------|
-| metalpriceapi.com | Live gold/silver prices (primary) | Yes — paid | `metalPriceApiKey` |
-| metals.dev | Live gold/silver prices (fallback) | Yes — paid | `metalsDevApiKey` |
-| fawazahmed0 CDN (jsdelivr) | Free metals/currency (fallback) | No | — |
-| gold-api.com | Free gold price (fallback) | No | — |
-| frankfurter.app | Free USD→INR rate | No | — |
-| news.google.com RSS | Jewellery news ticker | No | — |
-
-⚠️ App works without paid API keys — falls back to free sources automatically.
+**SomaFM channels:** Groove Salad, Drone Zone, Cliqhop, DEF CON Radio, Suburbs of Goa (Desi/Indian beats)
 
 ---
 
 ## 7. CRITICAL TECHNICAL DETAILS
 
 ### DB Safety (AUD main.js — 5 checks on POST /api/data)
-1. Incoming has 0 bags, server has 5+ → blocked
-2. Incoming has <75% of current bag count → blocked
-3. Incoming has <75% of current transaction count → blocked
-4. Incoming has fewer karigars → blocked
-5. Incoming size <60% of current → blocked
+1. Incoming 0 bags, server 5+ → blocked
+2. Incoming <75% bag count → blocked
+3. Incoming <75% transaction count → blocked
+4. Incoming fewer karigars → blocked
+5. Incoming size <60% → blocked
 
-### Weight Precision
-- `round3(n)` = `Math.round(n * 1000) / 1000`
-- Applied at all weight storage points — prevents floating point drift
+### Alloyed Metal Stock — IMPORTANT
+- `PM_DELIVERY_RECV` must NEVER be created for `COMPLETED_BAG` type — fixed in both individual + bulk delivery handlers
+- Extra metal comes from CO Alloyed Stock directly — PM Book must NOT be debited for extra metal — fixed
+- Data fix scripts were run to clean existing incorrect entries
 
-### Key Data Concepts
-- **Bag:** 1 bag = 1 design in production. No `itemId` (removed). Bag No. is the identifier.
-- **Order:** Multiple bags, same `orderNo`. Items store qty, metalType, purity, partsPerUnit.
-- **Qty ×2:** Stored as single entry with qty=2, shown as ×2 badge.
-- **Unbagged items:** Decrement as bags created, disappear when all done.
-- **Design Master:** `db.designMaster` = active. `db.designs` = old (ignored).
-- **Batch Filing:** `db.batchFilings` = unnumbered casting batches before bags are created.
-
-### AUB ↔ AUD
-- AUB syncs via `http://localhost:3737/api/data`
-- CO receipts → AUB Sales → From Desktop
-- By Order view: groups by orderNo, checkboxes, one invoice per order
-- By Bag view: individual receipts
-
-### AUL Connection
-- Timeout: 3000ms, isCheckingRef guard prevents race condition
-- Works on AURUM-FLOOR WiFi only
-- Parental Control must be "Ban Internet Access" (not URL Whitelist)
+### Split Bag (Group) Extra Metal
+- `group.currentWeight` updated when extra metal issued
+- Receive validation includes extra metal in maxReceivable
+- `BREAK_ISSUE` included in karigar active bag count
 
 ---
 
-## 8. WORK COMPLETED IN AURUM 3 SESSION (10 May 2026)
+## 8. WORK COMPLETED IN AURUM 4 SESSION (10–18 May 2026)
 
-### AUD — New Features (MainApp.jsx)
+### AUD — MainApp.jsx
 
-**Batch Pre-Processing tab** (inside Bags tab):
-- New sub-tab "⬡ Batch Pre-Processing" for unnumbered casting batches
-- Create batch: name, metal, purity, issued weight, dept, karigar
-- Receive back: enter received weight → loss auto-posted to karigar ledger + PM Book
-- Edit batch (locked fields after receiving)
-- Reverse batch (Issued: full delete / Received: removes loss entry, resets to Issued)
-- Mark Settled manually
-- "Create Bags from Batch" button → switches to Bags tab
-- `db.batchFilings[]` new collection added to initDB
+**Bag Journey Map** (Movement tab — 3rd column):
+- Vertical timeline showing complete bag movement history
+- 3-column layout: Bag selector | Action form | Journey timeline (240px)
+- Each step: coloured dot, dept name, karigar, issued/received weights, loss
+- Pulsing gold animation on current step
+- Pending CO delivery shows "→ CO / Awaiting receipt" not "CO ✓"
+- Green connector line between completed steps
+- `BagJourneyMap` component added before MovementView
 
-**Automations:**
-1. **Auto-complete Order** — when last bag delivered to CO, order status → Completed automatically
-2. **QC Pass → Auto-deliver** — after QC Pass, prompt "Deliver to CO now?" Y/N
-3. **Karigar Loss Auto-alert** — after receiving, if loss% > dept threshold → alert with month-to-date cumulative
-4. **PM Book Reconciliation** — ⚖ Reconcile button, proper modal with table (Ledger High / Physical High / Ledger Deficit)
-5. **Customer Gold Auto-settlement** — after CO receipt finalise, if customer pure gold balance = 0 → prompt to mark settled (uses PURITY_FACTORS conversion)
-6. **Stone Settlement Modal** — auto-triggered when receiving bag from Setting dept — enter set/returned/broken stones inline
+**Print Sheets** (Production sidebar menu):
+- "⎙ Print Sheets" tab visible to all roles (admin, CO, PM, DM)
+- Prints double-sided A4 Bag Movement Record sheets
+- Sheet numbers in red Courier New — auto-increments, remembers last session via localStorage
+- Left margin = punch hole binding space (Side A left, Side B right)
+- `PrintSheetsView` component + embedded HTML sheet
+- Standalone HTML also saved at `D:\Aurum\AURUM_BagMovementSheet.html`
 
-**Other fixes:**
-- Sticker print gap removed (fixed height removed from sticker cells)
-- Cosmetic improvements: darker theme, better shadows, smoother transitions, gold gradient accents, nav hover glow, badge padding
+**Stone settlement issued pieces fix:**
+- Was reading `netPieces` — fixed to read `netPieces||pieces||issuedPcs`
+- Carats also fixed: `netCarats||carats`
 
-**Code cleanup:**
-- Removed 8 dead functions (191 lines): `isRepairItem`, `generateItemId`, `generateDesignNo`, `loadFromStorage`, `saveToStorage`, `DesignGalleryTab`, `compressImage`, `DesignThumb`
+**Split bag fixes:**
+- Extra metal display: `group.currentWeight` now updated on extra metal issue
+- Receive validation: `extraForThisLeg` added to maxReceivable
+- Karigar count: `BREAK_ISSUE` + `db.groups` now included
+- `g is not defined` crash fixed (scope bug in filter)
+
+**Alloyed metal double credit fix:**
+- `PM_DELIVERY_RECV` blocked for `COMPLETED_BAG` — both individual + bulk delivery
+- PM Book extra metal debit removed (was incorrectly debiting PM Book for extra metal)
+- Data fix scripts run: `fix-alloyed-double-credit.js` (v2), `fix-pmbook-extra-metal.js`
+
+**Batch Pre-Processing:**
+- PM and DM can now create batches (was admin/CO only — fixed `canEdit`)
+
+**Help / Report Issue** (sidebar button):
+- Screenshot captured + saved to Windows Desktop as PNG
+- Opens WhatsApp Web with pre-filled message
+- Phone number in `main.js` → search `919XXXXXXXXX` to update
+- `help:captureScreen`, `help:saveScreenshot`, `help:openWhatsApp` in main.js + preload.js
+
+**Live Ticker** (tab bar):
+- Rotating quotes + SVG hexagon tile background
+- Hexagons pulse via CSS `nth-child` animation
+
+**Production Strip** (Dashboard bottom):
+- Scrolling marquee of in-process bags with photos
+- Click → Bags tab with bag highlighted via `navToBagId`
+
+**SomaFM music:**
+- 5th channel added: Suburbs of Goa (`ice2.somafm.com/suburbsofgoa-128-mp3`) — Desi/Indian beats
+- All SomaFM channels are free (voluntary donation model, no paywall)
+
+**AUB Connection in AUD:**
+- AUD sidebar shows "⚡ AUB CONNECTED — [name]" when AUB is synced
+- `aubUser` state + `aub:connected` IPC event listener in MainApp.jsx
+- `/api/aub-connect` POST endpoint in main.js
 
 ### AUD — UserManagement.jsx
-- Added **🔑 Reset Pw** button (admin only) — reset any user's password without knowing old password
-- Added `React` import (was missing)
-- Uses `onMouseDown` to avoid focus-blur click issue
+- 🔑 Reset Pw button (admin only) — no old password needed
+- `React` import added, `onMouseDown` fix
 
 ### AUD — preload.js
-- Added `adminResetPassword` to `window.aurum.auth` bridge
+- Added: `adminResetPassword`, `help.captureScreen`, `help.saveScreenshot`, `help.openWhatsApp`
 
 ### AUD — main.js
-- Added `auth:adminResetPassword` IPC handler
-- Added `/api/admin-reset-password` HTTP route (admin only)
-- Added two safe background throttling flags
-- ⚠️ vite.config.js must stay minimal (base: './', outDir: 'dist') — chunk splitting breaks Electron
+- Added: `auth:adminResetPassword`, help IPC handlers, `/api/aub-connect`, `/api/admin-reset-password`
+- Fixed: `PM_DELIVERY_RECV` not created for COMPLETED_BAG
+- WhatsApp phone: search `919XXXXXXXXX` to update
 
-### GitHub
-- First push to digant-brasilgo/aurum-desktop
-- `.gitignore` excludes: node_modules/, dist/, release/
+### AUB — App.jsx
+- Design thumbnails in Sales → From Desktop (By Order + By Bag views)
+- Cancelled invoice receipts reappear in From Desktop for re-invoicing
+- "⚠ Invoice Cancelled — Redo" badge on affected rows
+- Party delete: `deletedInAUB` flag — deleted parties hidden from list + dropdowns, never re-imported
+- Auto-import on login + Sync: skips `deletedInAUB` parties, updates details of existing ones
+- Party count excludes `deletedInAUB` parties
+- Delete party uses `splice` (in-place mutation for proper save)
+- Display name shown in top bar (from `db.settings.displayName`)
+- Settings: "Your Display Name" field — sent to AUD on every sync
+
+### AUB — electron.js
+- `displayName` added to auth file
+- `auth:login` returns `displayName`
+- `auth:setDisplayName` IPC handler added
 
 ---
 
 ## 9. IMPORTANT WARNINGS
 
-- **vite.config.js** — keep MINIMAL. Any `manualChunks` or chunk splitting BREAKS the app (Electron can't load split chunks via file://)
-- **MainApp.jsx.bak** — ALWAYS backup before replacing: `copy "D:\Aurum\aurum-desktop\src\MainApp.jsx" "D:\Aurum\aurum-desktop\src\MainApp.jsx.bak"`
-- **G: drive xcopy** — only run AFTER a successful build, not before
-- **AUL Parental Control** — must be "Ban Internet Access". URL Whitelist blocks port 3737.
+- **vite.config.js** — keep MINIMAL. `manualChunks` BREAKS Electron
+- **MainApp.jsx.bak** — ALWAYS backup before replacing
+- **G: drive xcopy** — only AFTER successful build
+- **AUL Parental Control** — must be "Ban Internet Access" not URL Whitelist
+- **WhatsApp phone number** — in `main.js` as `919XXXXXXXXX` — must be updated
+- **Alloyed stock** — never create `PM_DELIVERY_RECV` for `COMPLETED_BAG` type
+- **PM Book** — never debit for extra metal issues (extra metal comes from CO Alloyed Stock)
 
 ---
 
@@ -266,9 +264,10 @@ All keys stored in AUD Settings (not hardcoded):
 - **Jewellery tag printing** — TSC TTP-244, TSPL, barcode, scan-to-invoice. Deferred.
 - **AUB order invoice status** — Pending/Partial/Invoiced per order. Not built.
 - **AUL company logo** — still null in `/api/status`
-- **AUL DM phone** — add when ready (IP .101, same router setup)
-- **`db.designs` cleanup** — old Item Register data in DB, can wipe manually
-- **Commercialisation** — see `AURUM_Commercialisation_Roadmap.md` in D:\Aurum\
+- **AUL DM phone** — add when ready (IP .101)
+- **`db.designs` cleanup** — old data, can wipe manually
+- **External help web page** — for customers who can't open app (QR code)
+- **Commercialisation** — see `AURUM_Commercialisation_Roadmap.md` in `D:\Aurum\`
 
 ---
 
@@ -283,7 +282,7 @@ Then paste this document.
 ## 12. REBUILD & BACKUP COMMANDS
 
 ```cmd
-:: Backup MainApp FIRST before replacing
+:: Backup MainApp FIRST
 copy "D:\Aurum\aurum-desktop\src\MainApp.jsx" "D:\Aurum\aurum-desktop\src\MainApp.jsx.bak"
 
 :: AUD rebuild
@@ -306,16 +305,10 @@ git add .
 git commit -m "Describe changes"
 git push
 
-:: Verify server running
+:: Verify server
 curl http://192.168.1.7:3737/api/status
-
-:: Verify firewall rule
-netsh advfirewall firewall show rule name="AURUM"
-
-:: PM Book reconcile test
-Open AUD → PM Book → ⚖ Reconcile button
 ```
 
 ---
 
-*Aurum 1 + Aurum 2 + Aurum 3 sessions complete. Next: Aurum 4*
+*Aurum 1 + Aurum 2 + Aurum 3 + Aurum 4 sessions complete. Next: Aurum 5*

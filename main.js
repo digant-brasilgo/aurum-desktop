@@ -154,7 +154,18 @@ function startLanServer() {
     appExpress.get('/api/status', (req, res) => {
       const co = readCompanies().find(c=>c.id===activeCompanyId) || readCompanies()[0] || {};
       res.json({ ok: true, server: 'AURUM', version: '1.0.0', time: new Date().toISOString(),
-        company: { id: co.id, name: co.name, shortName: co.shortName, logo: co.logo||null, copyright: co.copyright||'' } });
+        company: { id: co.id, name: co.name, shortName: co.shortName, logo: co.logo||null, copyright: co.copyright||'' },
+        aubConnected: global.aubConnectedUser || null,
+      });
+    });
+
+    // AUB connection ping — AUB sends its user info when syncing
+    appExpress.post('/api/aub-connect', authMiddleware, (req, res) => {
+      const { displayName, role } = req.body || {};
+      global.aubConnectedUser = { displayName: displayName||'AUB User', role, connectedAt: new Date().toISOString() };
+      // Notify renderer
+      if(mainWindow) mainWindow.webContents.send('aub:connected', global.aubConnectedUser);
+      res.json({ ok: true });
     });
 
     appExpress.post('/api/login', (req, res) => {
@@ -1046,6 +1057,36 @@ ipcMain.handle('config:set', () => true);
 ipcMain.handle('window:minimize',    () => mainWindow.minimize());
 ipcMain.handle('window:maximize',    () => mainWindow.isMaximized() ? mainWindow.restore() : mainWindow.maximize());
 ipcMain.handle('window:close',       () => mainWindow.hide());
+
+// Help / Bug Reporter — capture screenshot and open WhatsApp
+ipcMain.handle('help:captureScreen', async () => {
+  try {
+    const image = await mainWindow.webContents.capturePage();
+    const base64 = image.toDataURL();
+    return { ok: true, dataUrl: base64 };
+  } catch(err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('help:saveScreenshot', async (e, dataUrl) => {
+  try {
+    const desktopPath = path.join(os.homedir(), 'Desktop');
+    const fileName    = 'AURUM-Issue-' + new Date().toISOString().replace(/[:.]/g,'-').slice(0,19) + '.png';
+    const filePath    = path.join(desktopPath, fileName);
+    const base64Data  = dataUrl.replace(/^data:image\/png;base64,/, '');
+    fs.writeFileSync(filePath, base64Data, 'base64');
+    return { ok: true, filePath, fileName };
+  } catch(err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('help:openWhatsApp', async (e, message) => {
+  const encoded = encodeURIComponent(message);
+  const phone = '919XXXXXXXXX'; // ← Replace with your WhatsApp number (91 + 10 digits, no spaces or dashes)
+  await shell.openExternal(`https://wa.me/${phone}?text=${encoded}`);
+});
 ipcMain.handle('window:isMaximized', () => mainWindow.isMaximized());
 
 // App
