@@ -5,13 +5,13 @@ const ROLES = {
     label: 'Administrator',
     color: '#c8a850',
     canDo: ['all'],
-    canCreateRoles: ['admin','co','production_manager','data_manager'],
+    canCreateRoles: ['admin','co','production_manager','data_manager','metal_issuer','stone_issuer'],
   },
   co: {
     label: 'Central Office',
     color: '#4a9eda',
     canDo: ['all'],
-    canCreateRoles: ['production_manager','data_manager'],
+    canCreateRoles: ['production_manager','data_manager','metal_issuer','stone_issuer'],
   },
   production_manager: {
     label: 'Production Manager',
@@ -37,6 +37,20 @@ const ROLES = {
       'create_bags','create_designs','create_karigars',
     ],
     canCreateRoles: [],  // cannot create system users
+    noEdit: true,
+  },
+  metal_issuer: {
+    label: 'Metal Issuer',
+    color: '#e0903a',
+    canDo: ['view_dashboard'],
+    canCreateRoles: [],
+    noEdit: true,
+  },
+  stone_issuer: {
+    label: 'Stone Issuer',
+    color: '#7090c0',
+    canDo: ['view_dashboard'],
+    canCreateRoles: [],
     noEdit: true,
   },
 };

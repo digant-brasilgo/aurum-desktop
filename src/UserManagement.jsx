@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 
 const ROLES = {
-  admin: { label:'Administrator',      color:'#c8a850' },
-  co:    { label:'Central Office',     color:'#4a9eda' },
-  production_manager: { label:'Production Manager', color:'#4db88a' },
-  data_manager:       { label:'Data Manager',       color:'#a070d0' },
+  admin:              { label:'Administrator',       color:'#c8a850' },
+  co:                 { label:'Central Office',      color:'#4a9eda' },
+  production_manager: { label:'Production Manager',  color:'#4db88a' },
+  data_manager:       { label:'Data Manager',        color:'#a070d0' },
+  metal_issuer:       { label:'Metal Issuer',        color:'#e0903a' },
+  stone_issuer:       { label:'Stone Issuer',        color:'#7090c0' },
 };
 
 const IS_ELECTRON = typeof window !== 'undefined' && !!window.isElectron;
@@ -47,8 +49,8 @@ export default function UserManagement({ currentUser }) {
   // Roles this user can create
   const creatableRoles = canManage
     ? (currentUser.role === 'admin'
-        ? ['admin','co','production_manager','data_manager']
-        : ['production_manager','data_manager'])
+        ? ['admin','co','production_manager','data_manager','metal_issuer','stone_issuer']
+        : ['production_manager','data_manager','metal_issuer','stone_issuer'])
     : [];
 
   function flash(text, isError=false) {
@@ -225,10 +227,12 @@ export default function UserManagement({ currentUser }) {
           <div style={{ fontSize:'11px', color:'#c8a850', letterSpacing:'2px', marginBottom:'12px' }}>ROLE PERMISSIONS</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
             {[
-              { key:'admin', desc:'Full access to everything including all settings, user management, financial data, editing any entry.' },
-              { key:'co', desc:'Full access to all operations. Can create Production and Data Manager accounts.' },
+              { key:'admin',              desc:'Full access to everything including all settings, user management, financial data, editing any entry.' },
+              { key:'co',                 desc:'Full access to all operations. Can create Production and Data Manager accounts.' },
               { key:'production_manager', desc:'Can create Karigars, Designs, Bags. Enter movements and weights. Cannot edit past entries. Cannot manage system users.' },
-              { key:'data_manager', desc:'Same as Production Manager — create and enter data. Cannot edit past entries or manage system users.' },
+              { key:'data_manager',       desc:'Same as Production Manager — create and enter data. Cannot edit past entries or manage system users.' },
+              { key:'metal_issuer',       desc:'Physically holds and issues alloyed metal stock. Sees their issuance queue. Confirms physical handover of approved metal demands.' },
+              { key:'stone_issuer',       desc:'Physically holds and issues stone stock. Sees their issuance queue. Confirms physical handover of approved stone demands.' },
             ].map(({key,desc})=>(
               <div key={key} style={{ padding:'12px', background:'#0a0a0f', borderRadius:'2px', border:`1px solid ${ROLES[key].color}22` }}>
                 <span style={badge(ROLES[key].color)}>{ROLES[key].label}</span>
