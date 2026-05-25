@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('aurum', {
     saveScreenshot: (dataUrl) => ipcRenderer.invoke('help:saveScreenshot', dataUrl),
     openWhatsApp:   (message) => ipcRenderer.invoke('help:openWhatsApp', message),
   },
+  notify: (data) => ipcRenderer.send('notify:co-alert', data),
   on: (channel, fn) => {
     const sub = (_, ...args) => fn(...args);
     ipcRenderer.on(channel, sub);

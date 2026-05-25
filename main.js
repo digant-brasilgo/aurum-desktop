@@ -1250,6 +1250,20 @@ app.whenReady().then(() => {
   scheduleNewsFetch();
 });
 
+// ── Desktop Notification IPC (fires even when AUD is minimised) ──
+const { Notification: ElectronNotif } = require('electron')
+ipcMain.on('notify:co-alert', (e, { title, body }) => {
+  if (ElectronNotif.isSupported()) {
+    const n = new ElectronNotif({
+      title: title || '⚑ AURUM Alert',
+      body:  body  || 'Action required',
+      timeoutType: 'never',
+    })
+    n.on('click', () => { if(mainWindow){ mainWindow.show(); mainWindow.focus(); } })
+    n.show()
+  }
+})
+
 app.on('window-all-closed', () => {}); // Stay in tray
 app.on('activate', () => mainWindow.show());
 app.on('before-quit', () => {
