@@ -1084,7 +1084,7 @@ ipcMain.handle('help:saveScreenshot', async (e, dataUrl) => {
 
 ipcMain.handle('help:openWhatsApp', async (e, message) => {
   const encoded = encodeURIComponent(message);
-  const phone = '919XXXXXXXXX'; // ← Replace with your WhatsApp number (91 + 10 digits, no spaces or dashes)
+  const phone = '919311564850'; // ← Replace with your WhatsApp number (91 + 10 digits, no spaces or dashes)
   await shell.openExternal(`https://wa.me/${phone}?text=${encoded}`);
 });
 ipcMain.handle('window:isMaximized', () => mainWindow.isMaximized());
@@ -1250,19 +1250,15 @@ app.whenReady().then(() => {
   scheduleNewsFetch();
 });
 
-// ── Desktop Notification IPC (fires even when AUD is minimised) ──
-const { Notification: ElectronNotif } = require('electron')
+// ── Desktop Notification IPC ──
+const { Notification: ElectronNotif } = require('electron');
 ipcMain.on('notify:co-alert', (e, { title, body }) => {
   if (ElectronNotif.isSupported()) {
-    const n = new ElectronNotif({
-      title: title || '⚑ AURUM Alert',
-      body:  body  || 'Action required',
-      timeoutType: 'never',
-    })
-    n.on('click', () => { if(mainWindow){ mainWindow.show(); mainWindow.focus(); } })
-    n.show()
+    const n = new ElectronNotif({ title: title || '⚑ AURUM Alert', body: body || 'Action required', timeoutType: 'never' });
+    n.on('click', () => { if(mainWindow){ mainWindow.show(); mainWindow.focus(); } });
+    n.show();
   }
-})
+});
 
 app.on('window-all-closed', () => {}); // Stay in tray
 app.on('activate', () => mainWindow.show());

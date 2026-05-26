@@ -115,7 +115,7 @@
     </div>
     <div><div class="side-label">SIDE &nbsp; A</div></div>
     <div style="text-align:right;">
-      <div class="sheet-no">SHEET NO. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+      <div class="sheet-no">JOB SHEET NO. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
       <div style="margin-top:2mm;">
         <div style="font-size:7.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#555;margin-bottom:1mm;">Date</div>
         <div style="border-bottom:1px solid #aaa;height:7mm;width:100%;"></div>
@@ -224,7 +224,7 @@
     </div>
     <div><div class="side-label">SIDE &nbsp; B</div></div>
     <div style="text-align:right;">
-      <div class="sheet-no">SHEET NO. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+      <div class="sheet-no">JOB SHEET NO. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
       <div class="fg c2" style="margin-top:2mm;">
         <div class="field"><label>Bag No.</label><div class="line"></div></div>
         <div class="field"><label>Design ID</label><div class="line"></div></div>
@@ -350,8 +350,8 @@
     var pages = '';
     for(var i=0;i<cnt;i++){
       var no = pad(start + i);
-      var a = pageA.replace(/SHEET NO\\. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/g, 'SHEET NO. ' + no);
-      var b = pageB.replace(/SHEET NO\\. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/g, 'SHEET NO. ' + no);
+      var a = pageA.replace(/JOB SHEET NO\. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/g, 'JOB SHEET NO. ' + no);
+      var b = pageB.replace(/JOB SHEET NO\. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/g, 'JOB SHEET NO. ' + no);
       pages += a + b;
     }
 
