@@ -243,6 +243,7 @@ function initDB() {
     extraMetalIssues: [],   // Extra metal issued to karigars mid-job
     pmFreeMetal: [],        // Free metal held by PM (partial recalls, not yet given to CO)
     coReceipts: [],         // Central Office receipts of completed/returned bags
+    readyStock: [],          // Ready stock items (stocked jewellery for shop)
     pureMetalStock: [],     // Pure metal stock transactions (gold + silver)
     customerGold: [],       // Customer gold accounts
     machineCollections: [], // Machine dust collections + refining records
@@ -323,6 +324,7 @@ function migrateDB(db) {
       ...k,
     }));
     // Ensure all coReceipts have required fields
+    if(!migrated.readyStock) migrated.readyStock = [];
     migrated.coReceipts = (migrated.coReceipts||[]).map(r => ({
       invoiceStatus:  "Pending",
       deliveryStatus: "Pending",
@@ -353,8 +355,44 @@ const STORAGE_KEY = "aurum_db_v1";
 
 export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTab, openTabs, setOpenTabs, openTab, company, onLogout, theme, toggleTheme }) {
   const [navToBagId, setNavToBagId] = React.useState("");
+  const [scanResult, setScanResult] = React.useState(null); // barcode scan result popup
   const goToBagMovement = (bagId) => { setNavToBagId(bagId); openTab("movement"); };
   const [modal, setModal] = useState(null);
+
+  // ── Global Barcode Scanner Listener ──────────────────────────────────────
+  React.useEffect(() => {
+    let scanBuffer = "";
+    let scanTimer = null;
+    const SCAN_SPEED_MS = 80; // chars must arrive within 80ms = barcode scanner speed
+    const MIN_SCAN_LENGTH = 5;
+
+    const handleKeyDown = (e) => {
+      // Ignore if user is typing in an input/textarea
+      const tag = document.activeElement?.tagName;
+      if(tag==="INPUT"||tag==="TEXTAREA"||tag==="SELECT") return;
+
+      if(e.key==="Enter") {
+        if(scanBuffer.length >= MIN_SCAN_LENGTH) {
+          const code = scanBuffer.trim();
+          // Extract bagId from barcode (BGG-R5-U1 → BGG-R5, or just BGG-R5)
+          const bagId = code.replace(/-U\d+$/, "");
+          setScanResult({ code, bagId });
+        }
+        scanBuffer = "";
+        clearTimeout(scanTimer);
+        return;
+      }
+
+      if(e.key.length===1) {
+        scanBuffer += e.key;
+        clearTimeout(scanTimer);
+        scanTimer = setTimeout(() => { scanBuffer = ""; }, SCAN_SPEED_MS * 3);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
   // db must be defined before any hooks that reference it
   const _merged = { ...initDB(), ...(rawDb || {}) };
   const db = migrateDB(_merged);
@@ -1236,6 +1274,71 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
           </main>
         </div>
       </div>
+
+      {/* ── Barcode Scan Result Popup ── */}
+      {scanResult && (()=>{
+        const bag = (db.bags||[]).find(b=>b.id===scanResult.bagId);
+        const stockItem = (db.readyStock||[]).find(s=>s.bagId===scanResult.bagId);
+        const design = bag ? (db.designMaster||db.designs||[]).find(d=>d.id===bag.designId||d.designId===bag.designId) : null;
+        const photo = design?.photo||design?.photos?.[0]||null;
+        return (
+        <div style={{ position:"fixed", bottom:"24px", right:"24px", zIndex:2000,
+          background:"var(--dark2)", border:"2px solid var(--gold)", borderRadius:"8px",
+          padding:"16px", width:"320px", boxShadow:"0 8px 32px rgba(0,0,0,0.6)" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"10px" }}>
+            <div style={{ fontSize:"11px", color:"var(--gold)", fontWeight:"bold", letterSpacing:"1px" }}>🔍 BARCODE SCANNED</div>
+            <button className="btn btn-sm" onClick={()=>setScanResult(null)}>✕</button>
+          </div>
+          {bag ? (
+            <div>
+              <div style={{ display:"flex", gap:"10px", alignItems:"flex-start", marginBottom:"10px" }}>
+                {photo
+                  ? <img src={photo} style={{ width:"48px", height:"48px", objectFit:"cover", borderRadius:"4px", flexShrink:0 }} />
+                  : <div style={{ width:"48px", height:"48px", borderRadius:"4px", background:"var(--dark3)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"20px", flexShrink:0 }}>💍</div>
+                }
+                <div>
+                  <div style={{ color:"var(--gold)", fontWeight:"bold", fontSize:"14px" }}>{bag.id}</div>
+                  <div style={{ fontSize:"11px", color:"var(--text-secondary)" }}>{bag.designId} · {bag.categoryLabel}</div>
+                  <div style={{ fontSize:"11px", color:"var(--text-dim)" }}>{bag.purity} {bag.metalType}</div>
+                </div>
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"6px", fontSize:"11px", marginBottom:"10px" }}>
+                <div style={{ background:"var(--dark3)", padding:"5px 8px", borderRadius:"3px" }}>
+                  <div style={{ color:"var(--text-dim)", fontSize:"10px" }}>GROSS</div>
+                  <div style={{ color:"var(--gold-light)", fontWeight:"bold" }}>{(bag.grossWeight||bag.currentWeight||0).toFixed(3)}g</div>
+                </div>
+                <div style={{ background:"var(--dark3)", padding:"5px 8px", borderRadius:"3px" }}>
+                  <div style={{ color:"var(--text-dim)", fontSize:"10px" }}>NET METAL</div>
+                  <div style={{ color:"var(--gold-light)", fontWeight:"bold" }}>{(bag.netMetalWeight||bag.currentWeight||0).toFixed(3)}g</div>
+                </div>
+                {(bag.stoneWeightGrams||0)>0 && (
+                  <div style={{ background:"var(--dark3)", padding:"5px 8px", borderRadius:"3px" }}>
+                    <div style={{ color:"var(--text-dim)", fontSize:"10px" }}>STONE</div>
+                    <div style={{ color:"#7090c0", fontWeight:"bold" }}>{(bag.stoneWeightGrams||0).toFixed(3)}g</div>
+                  </div>
+                )}
+                {stockItem && (
+                  <div style={{ background:"rgba(184,148,64,0.1)", border:"1px solid var(--gold-dim)", padding:"5px 8px", borderRadius:"3px" }}>
+                    <div style={{ color:"var(--text-dim)", fontSize:"10px" }}>PRICE</div>
+                    <div style={{ color:"var(--gold)", fontWeight:"bold" }}>₹{(stockItem.suggestedPrice||0).toLocaleString("en-IN")}</div>
+                  </div>
+                )}
+              </div>
+              <div style={{ display:"flex", gap:"8px" }}>
+                <button className="btn btn-sm btn-gold" style={{ flex:1 }} onClick={()=>{ goToBagMovement(bag.id); setScanResult(null); }}>
+                  → Open in Movement
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ color:"var(--loss)", fontSize:"12px" }}>
+              Bag "{scanResult.bagId}" not found.<br/>
+              <span style={{ fontSize:"11px", color:"var(--text-dim)" }}>Code: {scanResult.code}</span>
+            </div>
+          )}
+        </div>
+        );
+      })()}
 
       {modal && (
         <div className="modal-overlay" onClick={()=>setModal(null)}>
@@ -3261,6 +3364,7 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
   const [historyFilter, setHistoryFilter] = useState("all");
   const [historyPage, setHistoryPage] = useState(1);
   const HISTORY_PAGE_SIZE = 20;
+  const [stockPriceForm, setStockPriceForm] = useState(null); // { receiptId, price }
   const [receiveForm, setReceiveForm] = useState({ bagId:"", receiveType:"normal", notes:"", photo:null });
   const [memoReceipt, setMemoReceipt] = useState(null);
   const [metalRecvForm, setMetalRecvForm] = useState({ deliveryId:"", notes:"" });
@@ -3654,6 +3758,7 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
           { id:"history",       label:"⎘ Receipt History" },
           { id:"invoice",       label:"🧾 Proforma Invoice" },
           { id:"gemstone",      label:"💎 Gemstone Ledger" },
+          { id:"readystock",    label:"🏷 Ready Stock" },
         ].map(t=>(
           <button key={t.id} className={`btn ${coTab===t.id?"btn-gold":""}`} onClick={()=>setCoTab(t.id)}>{t.label}</button>
         ))}
@@ -4776,6 +4881,11 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
             </div>
 
             {/* ===== PRINTABLE INVOICE ===== */}
+            <style dangerouslySetInnerHTML={{__html:`
+              .print-invoice, .print-invoice * { color: #1a1a1a !important; }
+              .print-invoice .text-green { color: #1a7a1a !important; }
+              .print-invoice .text-muted { color: #555 !important; }
+            `}} />
             <div className="print-invoice" style={{
               background:"white", color:"#1a1a1a", padding:"32px 40px",
               fontFamily:"'Times New Roman', serif", maxWidth:"820px", margin:"0 auto",
@@ -4797,10 +4907,10 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
                 <div>
                   <table style={{ width:"100%", fontSize:"12px" }}>
                     <tbody>
-                      <tr><td style={{ color:"#555", width:"110px" }}>Invoice No.</td><td style={{ fontWeight:"bold" }}>: {inv.invoiceNo}</td></tr>
-                      <tr><td style={{ color:"#555" }}>Date</td><td>: {inv.invoiceDate ? new Date(inv.invoiceDate).toLocaleDateString("en-IN",{day:"2-digit",month:"long",year:"numeric"}) : ""}</td></tr>
-                      <tr><td style={{ color:"#555" }}>Order No.</td><td>: {inv.orderNo||"—"}</td></tr>
-                      <tr><td style={{ color:"#555" }}>Bag / Ref No.</td><td>: {inv.bagId}</td></tr>
+                      <tr><td style={{ color:"#555", width:"110px" }}>Invoice No.</td><td style={{ fontWeight:"bold", color:"#1a1a1a" }}>: {inv.invoiceNo}</td></tr>
+                      <tr><td style={{ color:"#555" }}>Date</td><td style={{ color:"#1a1a1a" }}>: {inv.invoiceDate ? new Date(inv.invoiceDate).toLocaleDateString("en-IN",{day:"2-digit",month:"long",year:"numeric"}) : ""}</td></tr>
+                      <tr><td style={{ color:"#555" }}>Order No.</td><td style={{ color:"#1a1a1a" }}>: {inv.orderNo||"—"}</td></tr>
+                      <tr><td style={{ color:"#555" }}>Bag / Ref No.</td><td style={{ color:"#1a1a1a" }}>: {inv.bagId}</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -4830,7 +4940,7 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
                   <tr style={{ borderBottom:"1px solid #ddd" }}>
                     <td style={{ padding:"8px 10px" }}>1</td>
                     <td style={{ padding:"8px 10px" }}>
-                      <div style={{ fontWeight:"bold" }}>{inv.categoryLabel} — {inv.purity} {inv.metalType}</div>
+                      <div style={{ fontWeight:"bold", color:"#1a1a1a" }}>{inv.categoryLabel} — {inv.purity} {inv.metalType}</div>
                       <div style={{ fontSize:"11px", color:"#555", marginTop:"2px" }}>Design: {inv.designId}</div>
                       {/* Stones */}
                       {inv.stonesByType && Object.entries(inv.stonesByType).filter(([,s])=>s.carats>0).map(([type,s])=>(
@@ -4955,8 +5065,8 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:"13px" }}>
                     <tbody>
                       <tr style={{ borderTop:"2px solid #1a1a1a" }}>
-                        <td style={{ padding:"6px 12px", fontWeight:"bold" }}>Sub Total</td>
-                        <td style={{ padding:"6px 12px", textAlign:"right", fontWeight:"bold" }}>₹{(metalAmount + makingAmt + transportAmt + additionalTotal + manualTotal).toFixed(2)}</td>
+                        <td style={{ padding:"6px 12px", fontWeight:"bold", color:"#1a1a1a" }}>Sub Total</td>
+                        <td style={{ padding:"6px 12px", textAlign:"right", fontWeight:"bold", color:"#1a1a1a" }}>₹{(metalAmount + makingAmt + transportAmt + additionalTotal + manualTotal).toFixed(2)}</td>
                       </tr>
                       {custGoldDeduction>0 && (
                         <tr style={{ borderTop:"1px solid #ddd", color:"#1a7a1a" }}>
@@ -4965,8 +5075,8 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
                         </tr>
                       )}
                       <tr style={{ borderTop:"1px solid #aaa", borderBottom:"2px solid #1a1a1a", background:"#f5f5f5" }}>
-                        <td style={{ padding:"8px 12px", fontWeight:"bold", fontSize:"14px" }}>GRAND TOTAL</td>
-                        <td style={{ padding:"8px 12px", textAlign:"right", fontWeight:"bold", fontSize:"14px" }}>₹{Math.max(0,subtotal).toFixed(2)}</td>
+                        <td style={{ padding:"8px 12px", fontWeight:"bold", fontSize:"14px", color:"#1a1a1a" }}>GRAND TOTAL</td>
+                        <td style={{ padding:"8px 12px", textAlign:"right", fontWeight:"bold", fontSize:"14px", color:"#1a1a1a" }}>₹{Math.max(0,subtotal).toFixed(2)}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -5300,6 +5410,53 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
                   }}>🧾 Generate Invoice</button>
                 )}
 
+                {/* ── Move to Ready Stock ── */}
+                {r.receiveType==="normal" && !((db.readyStock||[]).find(s=>s.receiptId===r.id)) && (
+                  stockPriceForm?.receiptId===r.id ? (
+                    <div style={{ display:"flex", gap:"6px", alignItems:"center" }}>
+                      <span style={{ fontSize:"11px", color:"var(--gold-dim)" }}>₹/unit:</span>
+                      <input type="number" autoFocus
+                        value={stockPriceForm.price}
+                        onChange={e=>setStockPriceForm(f=>({...f,price:e.target.value}))}
+                        style={{ width:"90px", fontSize:"12px", padding:"3px 8px", background:"var(--dark)", border:"1px solid var(--gold)", color:"var(--gold)", borderRadius:"3px", textAlign:"right" }}
+                        onKeyDown={e=>{ if(e.key==="Escape") setStockPriceForm(null); }}
+                      />
+                      <button className="btn btn-sm btn-gold" onClick={()=>{
+                        updateDB(prev=>{
+                          if(!prev.readyStock) prev.readyStock=[];
+                          const units = Array.from({length:r.unitCount||1},(_,i)=>({
+                            unitNo:i+1, barcode:r.bagId+"-U"+(i+1),
+                            tagPrintedAt:null, soldAt:null, soldTo:null, salePrice:null, saleId:null,
+                          }));
+                          prev.readyStock.push({
+                            id:"RS-"+(Date.now().toString(36)+Math.random().toString(36).slice(2,6)).toUpperCase(),
+                            receiptId:r.id, bagId:r.bagId, designId:r.designId,
+                            categoryLabel:r.categoryLabel, purity:r.purity, metalType:r.metalType,
+                            grossWeight:r.grossWeight, netMetalWeight:r.netMetalWeight,
+                            stoneWeightGrams:r.stoneWeightGrams||0, totalStoneCarats:r.totalStoneCarats||0,
+                            stonesByType:r.stonesByType||{}, unitCount:r.unitCount||1,
+                            suggestedPrice:parseFloat(stockPriceForm.price)||0,
+                            stockedAt:new Date().toISOString(), units, notes:"",
+                          });
+                          if(!prev.auditLogs) prev.auditLogs=[];
+                          prev.auditLogs.push({ id:"AL-"+(Date.now().toString(36)), action:"MOVED_TO_STOCK", entityId:r.bagId, details:`Bag ${r.bagId} moved to Ready Stock @ ₹${stockPriceForm.price}/unit`, timestamp:new Date().toISOString() });
+                          return prev;
+                        });
+                        setStockPriceForm(null);
+                      }}>✓ Move</button>
+                      <button className="btn btn-sm" onClick={()=>setStockPriceForm(null)}>✕</button>
+                    </div>
+                  ) : (
+                    <button className="btn btn-sm" style={{ borderColor:"#c8a850", color:"#c8a850" }}
+                      onClick={()=>setStockPriceForm({ receiptId:r.id, price:"" })}>
+                      🏷 → Ready Stock
+                    </button>
+                  )
+                )}
+                {(db.readyStock||[]).find(s=>s.receiptId===r.id) && (
+                  <span className="badge badge-gold" style={{ fontSize:"10px" }}>🏷 In Ready Stock</span>
+                )}
+
                 {/* ── Delivery status ── */}
                 <span style={{ fontSize:"11px", color:"var(--gold-dim)", marginLeft:"4px" }}>Delivery: </span>
                 {r.deliveryStatus==="Delivered"
@@ -5534,9 +5691,344 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
           </div>
         );
       })()}
+
+      {/* ── READY STOCK REGISTER ── */}
+      {coTab==="readystock" && <ReadyStockView db={db} updateDB={updateDB} />}
+
     </div>
   );
 }
+
+// ── Ready Stock View Component ───────────────────────────────────────────────
+function ReadyStockView({ db, updateDB }) {
+  const [rsView, setRsView] = React.useState("available");
+  const [rsPrintItem, setRsPrintItem] = React.useState(null);
+  const [rsEditPrice, setRsEditPrice] = React.useState(null);
+
+  const allStock = (db.readyStock||[]).slice().reverse();
+  const available = allStock.filter(s=>s.units.some(u=>!u.soldAt));
+  const sold = allStock.filter(s=>s.units.every(u=>u.soldAt));
+  const totalPieces = available.reduce((s,i)=>s+i.units.filter(u=>!u.soldAt).length,0);
+  const totalValue = available.reduce((s,i)=>s+i.suggestedPrice*(i.units.filter(u=>!u.soldAt).length),0);
+  const items = rsView==="available" ? available : rsView==="sold" ? sold : allStock;
+
+  return (
+  <div>
+    {/* Summary cards */}
+    <div style={{ display:"flex", gap:"12px", marginBottom:"16px", flexWrap:"wrap" }}>
+      {[
+        { label:"Available Pieces", value:totalPieces, color:"#4db88a" },
+        { label:"Total Stock Value", value:"₹"+totalValue.toLocaleString("en-IN"), color:"var(--gold)" },
+        { label:"Total Items", value:allStock.length, color:"var(--text-secondary)" },
+      ].map(c=>(
+        <div key={c.label} style={{ background:"var(--dark2)", border:"1px solid var(--dark4)", borderRadius:"4px", padding:"12px 20px", flex:"1", minWidth:"140px" }}>
+          <div style={{ fontSize:"10px", color:"var(--text-dim)", letterSpacing:"1px", textTransform:"uppercase", marginBottom:"4px" }}>{c.label}</div>
+          <div style={{ fontSize:"20px", fontWeight:"bold", color:c.color }}>{c.value}</div>
+        </div>
+      ))}
+    </div>
+
+    {/* View toggle */}
+    <div style={{ display:"flex", gap:"8px", marginBottom:"14px" }}>
+      {[["available","🏷 Available"],["sold","✓ Sold"],["all","All"]].map(([v,l])=>(
+        <button key={v} className={"btn btn-sm"+(rsView===v?" btn-gold":"")} onClick={()=>setRsView(v)}>{l}</button>
+      ))}
+    </div>
+
+    {/* Stock list */}
+    {items.length===0 && (
+      <div style={{ textAlign:"center", padding:"40px", color:"var(--text-dim)", fontSize:"12px", letterSpacing:"1px" }}>
+        No items in ready stock yet.<br/>
+        <span style={{ fontSize:"11px" }}>Go to Receipt History → click "🏷 → Ready Stock" on any completed receipt.</span>
+      </div>
+    )}
+
+    {items.map(item=>{
+      const availUnits = item.units.filter(u=>!u.soldAt);
+      const design = (db.designMaster||db.designs||[]).find(d=>d.id===item.designId||d.designId===item.designId);
+      const photo = design?.photo||design?.photos?.[0]||null;
+      return (
+      <div key={item.id} style={{ background:"var(--dark2)", border:"1px solid var(--dark4)", borderRadius:"4px", padding:"14px", marginBottom:"10px" }}>
+        <div style={{ display:"flex", gap:"12px", alignItems:"flex-start" }}>
+          {photo
+            ? <img src={photo} style={{ width:"56px", height:"56px", objectFit:"cover", borderRadius:"4px", border:"1px solid var(--dark4)", flexShrink:0 }} />
+            : <div style={{ width:"56px", height:"56px", borderRadius:"4px", border:"1px solid var(--dark4)", background:"var(--dark)", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center", fontSize:"18px" }}>💍</div>
+          }
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:"10px", marginBottom:"4px", flexWrap:"wrap" }}>
+              <span style={{ color:"var(--gold)", fontWeight:"bold", fontSize:"14px" }}>{item.bagId}</span>
+              <span style={{ color:"var(--text-secondary)", fontSize:"12px" }}>{item.designId}</span>
+              <span style={{ fontSize:"11px", color:"var(--text-dim)" }}>{item.categoryLabel} · {item.purity} {item.metalType}</span>
+              {availUnits.length>0
+                ? <span className="badge badge-green">{availUnits.length} available</span>
+                : <span className="badge" style={{ color:"var(--text-dim)" }}>Sold out</span>
+              }
+            </div>
+            <div style={{ display:"flex", gap:"16px", fontSize:"12px", color:"var(--text-secondary)", flexWrap:"wrap" }}>
+              <span>Gross: <strong>{(item.grossWeight||0).toFixed(3)}g</strong></span>
+              <span>Net: <strong>{(item.netMetalWeight||0).toFixed(3)}g</strong></span>
+              {item.stoneWeightGrams>0 && <span>Stone: <strong>{(item.stoneWeightGrams||0).toFixed(3)}g</strong></span>}
+              <span>Units: <strong>{item.unitCount}</strong></span>
+            </div>
+            {item.stonesByType && Object.keys(item.stonesByType).length>0 && (
+              <div style={{ fontSize:"11px", color:"#7090c0", marginTop:"3px" }}>
+                💎 {Object.entries(item.stonesByType).map(([t,s])=>`${t}: ${Math.max(0,s.pieces)}pcs / ${(Math.max(0,s.carats)||0).toFixed(2)}ct`).join(" | ")}
+              </div>
+            )}
+          </div>
+          <div style={{ flexShrink:0, textAlign:"right" }}>
+            {rsEditPrice===item.id ? (
+              <div style={{ display:"flex", gap:"6px", alignItems:"center", marginBottom:"6px" }}>
+                <input type="number" defaultValue={item.suggestedPrice}
+                  id={"price-"+item.id}
+                  style={{ width:"100px", fontSize:"13px", padding:"4px 8px", background:"var(--dark)", border:"1px solid var(--gold)", color:"var(--gold)", borderRadius:"3px", textAlign:"right" }}
+                />
+                <button className="btn btn-sm btn-gold" onClick={()=>{
+                  const val = parseFloat(document.getElementById("price-"+item.id).value)||0;
+                  updateDB(prev=>{ const s=prev.readyStock.find(x=>x.id===item.id); if(s) s.suggestedPrice=val; return prev; });
+                  setRsEditPrice(null);
+                  alert("Price updated ✓");
+                }}>✓</button>
+                <button className="btn btn-sm" onClick={()=>setRsEditPrice(null)}>✕</button>
+              </div>
+            ) : (
+              <div style={{ marginBottom:"6px" }}>
+                <div style={{ fontSize:"18px", fontWeight:"bold", color:"var(--gold)" }}>₹{(item.suggestedPrice||0).toLocaleString("en-IN")}</div>
+                <div style={{ fontSize:"10px", color:"var(--text-dim)" }}>per unit</div>
+              </div>
+            )}
+            <div style={{ display:"flex", gap:"6px", justifyContent:"flex-end", flexWrap:"wrap" }}>
+              <button className="btn btn-sm" onClick={()=>setRsEditPrice(rsEditPrice===item.id?null:item.id)}>✏ Price</button>
+              <button className="btn btn-sm btn-gold" onClick={()=>setRsPrintItem(item)}>🏷 Print Tag</button>
+            </div>
+          </div>
+        </div>
+        <div style={{ marginTop:"10px", display:"flex", gap:"8px", flexWrap:"wrap" }}>
+          {item.units.map(u=>(
+            <div key={u.unitNo} style={{ background:"var(--dark)", border:"1px solid var(--dark4)", borderRadius:"3px", padding:"4px 10px", fontSize:"11px",
+              color:u.soldAt?"var(--text-dim)":"var(--gold-dim)" }}>
+              {u.barcode} {u.soldAt?"✓ Sold":""}
+              {u.tagPrintedAt && <span style={{ fontSize:"10px", color:"var(--text-dim)", marginLeft:"4px" }}>🏷</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+    );})}
+
+    {rsPrintItem && (
+      <ReadyStockTagPrint item={rsPrintItem} db={db} updateDB={updateDB} onClose={()=>setRsPrintItem(null)} />
+    )}
+  </div>
+  );
+}
+
+// ── Ready Stock Tag Print Component ──────────────────────────────────────────
+function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
+  const [selectedUnits, setSelectedUnits] = React.useState(
+    item.units.filter(u=>!u.soldAt).map(u=>u.unitNo)
+  );
+
+  const design = (db.designMaster||db.designs||[]).find(d=>d.id===item.designId||d.designId===item.designId);
+  const photo = design?.photo||design?.photos?.[0]||null;
+  const hasStones = item.stoneWeightGrams > 0;
+
+  function handlePrint() {
+    if(selectedUnits.length===0) return alert("Select at least one unit to print.");
+
+    // Mark tags as printed
+    updateDB(prev=>{
+      const s = prev.readyStock.find(x=>x.id===item.id);
+      if(s) s.units.forEach(u=>{ if(selectedUnits.includes(u.unitNo)) u.tagPrintedAt=new Date().toISOString(); });
+      return prev;
+    });
+
+    const w = window.open("","_blank");
+    const tagsHtml = selectedUnits.map(unitNo=>{
+      const barcode = item.bagId+"-U"+unitNo;
+      return `
+      <div class="tag-wrap">
+        <!-- FACE 1: Identity & Price -->
+        <div class="face face1">
+          <div class="face1-left">
+            <svg class="barcode" id="bc-${barcode}"></svg>
+            <div class="bc-label">${barcode}</div>
+          </div>
+          <div class="face1-right">
+            <div class="f1-design">${item.designId||""}</div>
+            <div class="f1-purity">${item.purity} ${item.metalType}</div>
+            <div class="f1-cat">${item.categoryLabel||""} · U${unitNo}/${item.unitCount}</div>
+            <div class="f1-price">₹${(item.suggestedPrice||0).toLocaleString("en-IN")}</div>
+          </div>
+        </div>
+        <!-- Fold line -->
+        <div class="fold-line"></div>
+        <!-- FACE 2: Weights & Details -->
+        <div class="face face2">
+          <div class="face2-left">
+            ${photo ? `<img src="${photo}" class="tag-photo" />` : `<div class="tag-photo-placeholder">💍</div>`}
+          </div>
+          <div class="face2-right">
+            <div class="f2-row"><span class="f2-label">GROSS</span><span class="f2-val">${(item.grossWeight||0).toFixed(3)}g</span></div>
+            <div class="f2-row"><span class="f2-label">NET METAL</span><span class="f2-val">${(item.netMetalWeight||0).toFixed(3)}g</span></div>
+            ${hasStones ? `<div class="f2-row"><span class="f2-label">STONE</span><span class="f2-val">${(item.stoneWeightGrams||0).toFixed(3)}g</span></div>` : ""}
+            ${hasStones ? `<div class="f2-row"><span class="f2-label">CARATS</span><span class="f2-val">${(item.totalStoneCarats||0).toFixed(2)}ct</span></div>` : ""}
+            <div class="f2-brand">BRASILGO · AURUM</div>
+          </div>
+        </div>
+        <!-- Tail -->
+        <div class="tail"></div>
+      </div>`;
+    }).join("");
+
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+    <style>
+      * { margin:0; padding:0; box-sizing:border-box; }
+      body { background:#fff; font-family:Arial,sans-serif; }
+      @page { size: 100mm 57mm; margin:0; }
+      @media print { body { margin:0; } .no-print { display:none; } }
+
+      .tag-wrap {
+        width:100mm; height:57mm;
+        display:flex; flex-direction:column;
+        page-break-after:always;
+        overflow:hidden;
+      }
+      .face {
+        width:100mm; height:15mm;
+        display:flex; flex-direction:row;
+        overflow:hidden;
+        background:#fff;
+      }
+      .face1 { border:0.5px solid #333; border-bottom:none; }
+      .face2 { border:0.5px solid #333; border-top:none; }
+      .fold-line {
+        width:100mm; height:0;
+        border-top:1px dashed #aaa;
+      }
+      .tail {
+        width:35mm; height:27mm;
+        border:0.5px solid #333; border-top:none;
+        border-radius:0 0 8mm 8mm;
+        margin:0 auto;
+      }
+
+      /* FACE 1 */
+      .face1-left {
+        width:28mm; flex-shrink:0;
+        display:flex; flex-direction:column;
+        align-items:center; justify-content:center;
+        padding:1mm;
+        border-right:0.5px solid #ccc;
+      }
+      .barcode { width:26mm; height:10mm; }
+      .bc-label { font-size:5pt; text-align:center; color:#333; margin-top:0.5mm; letter-spacing:0.3px; }
+      .face1-right {
+        flex:1; padding:2mm 2mm 1mm 2mm;
+        display:flex; flex-direction:column; justify-content:space-between;
+      }
+      .f1-design { font-size:8pt; font-weight:bold; color:#000; letter-spacing:0.3px; }
+      .f1-purity { font-size:7pt; color:#333; }
+      .f1-cat { font-size:6pt; color:#666; }
+      .f1-price { font-size:11pt; font-weight:900; color:#000; letter-spacing:0.5px; }
+
+      /* FACE 2 */
+      .face2-left {
+        width:15mm; flex-shrink:0;
+        display:flex; align-items:center; justify-content:center;
+        border-right:0.5px solid #ccc;
+        padding:1mm;
+      }
+      .tag-photo { width:13mm; height:13mm; object-fit:cover; border-radius:1mm; }
+      .tag-photo-placeholder { font-size:14pt; }
+      .face2-right {
+        flex:1; padding:1.5mm 2mm;
+        display:flex; flex-direction:column; justify-content:space-between;
+      }
+      .f2-row { display:flex; justify-content:space-between; align-items:baseline; }
+      .f2-label { font-size:5.5pt; color:#666; text-transform:uppercase; letter-spacing:0.3px; }
+      .f2-val { font-size:7pt; font-weight:bold; color:#000; }
+      .f2-brand { font-size:4.5pt; color:#aaa; text-align:right; letter-spacing:0.5px; margin-top:auto; }
+
+      .no-print { position:fixed; top:8px; right:8px; z-index:999; }
+    </style>
+    </head><body>
+    <button class="no-print" onclick="window.print()">🖨 Print</button>
+    ${tagsHtml}
+    <script>
+      window.onload = function() {
+        document.querySelectorAll('.barcode').forEach(function(el) {
+          var code = el.parentElement.nextElementSibling ? 
+            el.parentElement.querySelector('.bc-label').textContent : 
+            el.closest('.face1-left').querySelector('.bc-label').textContent;
+          JsBarcode(el, code.trim(), { format:"CODE128", displayValue:false, width:1.2, height:28, margin:0, background:"#ffffff", lineColor:"#000000" });
+        });
+        setTimeout(function(){ window.print(); }, 1200);
+      };
+    </script>
+    </body></html>`);
+    w.document.close();
+  }
+
+  return (
+    <div style={{ position:"fixed", top:0, left:0, right:0, bottom:0, background:"rgba(0,0,0,0.7)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div className="card card-gold" style={{ width:"500px", maxHeight:"80vh", overflowY:"auto", padding:"20px" }}>
+        <div className="section-title"><span className="section-title-accent"></span>🏷 Print Jewellery Tags — {item.bagId}</div>
+
+        <div style={{ fontSize:"12px", color:"var(--text-dim)", marginBottom:"14px" }}>
+          Tag size: 100×15mm per face · Design photo on Face 2 · Barcode + Price on Face 1<br/>
+          Print on TSC TTP-244 Pro · 100mm × 57mm label (2 faces + tail)
+        </div>
+
+        {/* Unit selector */}
+        <div style={{ marginBottom:"14px" }}>
+          <div style={{ fontSize:"11px", color:"var(--gold-dim)", marginBottom:"8px", letterSpacing:"1px" }}>SELECT UNITS TO PRINT:</div>
+          <div style={{ display:"flex", gap:"8px", flexWrap:"wrap" }}>
+            <button className="btn btn-sm" onClick={()=>setSelectedUnits(item.units.filter(u=>!u.soldAt).map(u=>u.unitNo))}>All Available</button>
+            <button className="btn btn-sm" onClick={()=>setSelectedUnits([])}>None</button>
+          </div>
+          <div style={{ display:"flex", gap:"8px", flexWrap:"wrap", marginTop:"8px" }}>
+            {item.units.map(u=>(
+              <div key={u.unitNo} onClick={()=>setSelectedUnits(prev=>prev.includes(u.unitNo)?prev.filter(x=>x!==u.unitNo):[...prev,u.unitNo])}
+                style={{ padding:"6px 12px", borderRadius:"3px", cursor:u.soldAt?"not-allowed":"pointer", fontSize:"12px",
+                  background:selectedUnits.includes(u.unitNo)?"var(--gold)":"var(--dark3)",
+                  color:selectedUnits.includes(u.unitNo)?"#000":u.soldAt?"var(--text-dim)":"var(--text-secondary)",
+                  border:"1px solid "+(selectedUnits.includes(u.unitNo)?"var(--gold)":"var(--dark4)"),
+                  opacity:u.soldAt?0.5:1 }}>
+                U{u.unitNo} {u.tagPrintedAt?"🔄":""}
+                {u.soldAt && " (sold)"}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Tag preview */}
+        <div style={{ background:"var(--dark3)", border:"1px solid var(--dark4)", borderRadius:"4px", padding:"12px", marginBottom:"14px", fontSize:"11px", color:"var(--text-dim)" }}>
+          <div style={{ marginBottom:"6px", color:"var(--gold-dim)", fontWeight:"bold" }}>TAG PREVIEW ({selectedUnits.length} tag{selectedUnits.length!==1?"s":""})</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"8px" }}>
+            <div><div style={{ color:"var(--text-dim)", fontSize:"10px" }}>FACE 1</div>
+              <div>Barcode · {item.bagId}-Ux</div>
+              <div style={{ fontWeight:"bold", color:"var(--gold)", fontSize:"13px" }}>₹{(item.suggestedPrice||0).toLocaleString("en-IN")}</div>
+              <div>{item.designId} · {item.purity} {item.metalType}</div>
+            </div>
+            <div><div style={{ color:"var(--text-dim)", fontSize:"10px" }}>FACE 2</div>
+              <div>Gross: {(item.grossWeight||0).toFixed(3)}g</div>
+              <div>Net: {(item.netMetalWeight||0).toFixed(3)}g</div>
+              {hasStones && <div>Stone: {(item.stoneWeightGrams||0).toFixed(3)}g · {(item.totalStoneCarats||0).toFixed(2)}ct</div>}
+              <div style={{ color:"var(--text-dim)", fontSize:"10px" }}>+ Design photo</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display:"flex", gap:"8px" }}>
+          <button className="btn btn-gold" style={{ flex:1 }} onClick={handlePrint}>🖨 Open Print Preview ({selectedUnits.length} tags)</button>
+          <button className="btn" onClick={onClose}>✕ Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId, onInitialBagConsumed }) {
   const [stickerBag, setStickerBag] = useState(null);
   const [stickerQueue, setStickerQueue] = useState([]); // batch print queue
@@ -6839,13 +7331,13 @@ function SingleSticker({ bag, depts, siblingGroups }) {
 
   return (
     <div style={{
-      width:"3in", height:"1.5in",
+      width:"100mm", height:"1.5in",
       fontFamily:"Arial, sans-serif",
       background:"#fff",
       display:"flex", flexDirection:"row",
       overflow:"hidden", boxSizing:"border-box",
       pageBreakInside:"avoid",
-      border:"0.5px solid #bbb",
+      border:"1px solid #888",
     }}>
 
       {/* ── LEFT colour strip — full height ── */}
@@ -6886,7 +7378,7 @@ function SingleSticker({ bag, depts, siblingGroups }) {
       }}>
         {/* Bag No — single line, bold, biggest element */}
         <div style={{
-          fontSize:"13pt", fontWeight:"900", color:"#000",
+          fontSize:"15pt", fontWeight:"900", color:"#000",
           lineHeight:1.05, whiteSpace:"nowrap",
           overflow:"hidden", textOverflow:"ellipsis",
           letterSpacing:"0.2px", marginBottom:"2px",
@@ -6926,7 +7418,7 @@ function SingleSticker({ bag, depts, siblingGroups }) {
         </div>
 
         {bag.orderNo && (
-          <div style={{ fontSize:"5pt", color:"#555", marginTop:"1px", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+          <div style={{ fontSize:"5.5pt", color:"#222", marginTop:"1px", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", fontWeight:"600" }}>
             {bag.orderNo}
           </div>
         )}
@@ -7015,8 +7507,8 @@ function SingleSticker({ bag, depts, siblingGroups }) {
 
         {/* Tiny footer */}
         <div style={{
-          fontSize:"4pt", color:"#888", textAlign:"right",
-          marginTop:"1px", letterSpacing:"0.4px", flexShrink:0,
+          fontSize:"5pt", color:"#444", textAlign:"right",
+          marginTop:"1px", letterSpacing:"0.5px", flexShrink:0,
         }}>
           BRASILGO · AURUM
         </div>
@@ -7027,15 +7519,15 @@ function SingleSticker({ bag, depts, siblingGroups }) {
 }
 
 function BatchStickerPrint({ bags, db, onClose, onClearQueue }) {
-  const [stickerSize, setStickerSize] = useState("label");
+  const [stickerSize, setStickerSize] = useState("a4full");
   const [copiesPerBag, setCopiesPerBag] = useState(1);
 
   const depts = (db.departments||[]).filter(d => d.isActive && !d.isAdditionalJob).sort((a,b) => a.order - b.order);
 
   const sizeMap = {
-    label: { label:"Label 2×3 (99×67mm)", height:"67mm", cols:2 },
-    half:  { label:"A4 Half (2 per page)", height:"143mm", cols:1 },
-    third: { label:"A4 Third (3 per page)", height:"95mm", cols:1 },
+    a4full: { label:"A4 Full (2 cols × max rows)", height:"auto", cols:2 },
+    half:   { label:"A4 Half (2 per page)", height:"143mm", cols:1 },
+    third:  { label:"A4 Third (3 per page)", height:"95mm", cols:1 },
   };
   const sz = sizeMap[stickerSize];
 
@@ -7110,19 +7602,19 @@ function BatchStickerPrint({ bags, db, onClose, onClearQueue }) {
             position: fixed !important;
             top: 0 !important; left: 0 !important;
             margin: 0 !important;
-            width: 190mm !important;
+            width: 200mm !important;
           }
-          @page { size: A4 portrait; margin: 10mm; }
+          @page { size: A4 portrait; margin: 3mm; }
           .sticker-cell { break-inside: avoid !important; page-break-inside: avoid !important; }
         }
       `}} />
 
       <div className="sticker-sheet-wrap" style={{
         display: "grid",
-        gridTemplateColumns: sz.cols===2 ? "95mm 95mm" : "190mm",
+        gridTemplateColumns: sz.cols===2 ? "100mm 100mm" : "200mm",
         gap: "0",
         background: "#f5f5f5",
-        padding: "4px",
+        padding: "2px",
         width: "fit-content",
         border: "1px solid #ddd",
         margin: "0 auto",
@@ -7134,8 +7626,8 @@ function BatchStickerPrint({ bags, db, onClose, onClearQueue }) {
             <div key={i} className="sticker-cell" style={{
               padding: "3px",
               boxSizing: "border-box",
-              borderRight:  (!isLastCol) ? "1px dashed #bbb" : "none",
-              borderBottom: (!isLastRow) ? "1px dashed #bbb" : "none",
+              borderRight:  (!isLastCol) ? "1px dashed #666" : "none",
+              borderBottom: (!isLastRow) ? "1px dashed #666" : "none",
               overflow: "hidden",
             }}>
               <SingleSticker bag={bag} depts={depts} siblingGroups={siblingGroups} />
@@ -7149,7 +7641,7 @@ function BatchStickerPrint({ bags, db, onClose, onClearQueue }) {
 
 function BagStickerPrint({ bag, db, onClose }) {
   const [copies, setCopies] = useState(1);
-  const [stickerSize, setStickerSize] = useState("label");
+  const [stickerSize, setStickerSize] = useState("a4full");
 
   const depts = (db.departments||[])
     .filter(d => d.isActive && !d.isAdditionalJob)
@@ -7162,9 +7654,9 @@ function BagStickerPrint({ bag, db, onClose }) {
   const stickerArr = Array.from({ length: copies }, (_, i) => i);
 
   const sizeMap = {
-    label: { label:"Label 2×3 (99×67mm)", height:"67mm", cols:2 },
-    half:  { label:"A4 Half (2 per page)", height:"143mm", cols:1 },
-    third: { label:"A4 Third (3 per page)", height:"95mm", cols:1 },
+    a4full: { label:"A4 Full (2 cols × max rows)", height:"auto", cols:2 },
+    half:   { label:"A4 Half (2 per page)", height:"143mm", cols:1 },
+    third:  { label:"A4 Third (3 per page)", height:"95mm", cols:1 },
   };
   const sz = sizeMap[stickerSize];
 
@@ -7193,7 +7685,7 @@ function BagStickerPrint({ bag, db, onClose }) {
           </button>
         </div>
         <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"6px" }}>
-          {stickerSize==="label" ? "2 columns × rows on A4 · fits standard sticker sheets" :
+          {stickerSize==="a4full" ? "2 columns × max rows on A4 · all bags on minimum pages" :
            stickerSize==="half"  ? "2 stickers per A4 · cut along centre" :
            "3 stickers per A4 · cut along lines"}
           {" · Enable "}
@@ -7215,19 +7707,19 @@ function BagStickerPrint({ bag, db, onClose }) {
             position: fixed !important;
             top: 0 !important; left: 0 !important;
             margin: 0 !important;
-            width: 190mm !important;
+            width: 200mm !important;
           }
-          @page { size: A4 portrait; margin: 10mm; }
+          @page { size: A4 portrait; margin: 3mm; }
           .sticker-cell { break-inside: avoid !important; page-break-inside: avoid !important; }
         }
       `}} />
 
       <div className="sticker-sheet-wrap" style={{
         display: "grid",
-        gridTemplateColumns: sz.cols===2 ? "95mm 95mm" : "190mm",
+        gridTemplateColumns: sz.cols===2 ? "100mm 100mm" : "200mm",
         gap: "0",
         background: "#f5f5f5",
-        padding: "4px",
+        padding: "2px",
         width: "fit-content",
         border: "1px solid #ddd",
         margin: "0 auto",
@@ -7240,8 +7732,8 @@ function BagStickerPrint({ bag, db, onClose }) {
               padding: "3px",
               height: sz.height,
               boxSizing: "border-box",
-              borderRight:  (!isLastCol) ? "1px dashed #bbb" : "none",
-              borderBottom: (!isLastRow) ? "1px dashed #bbb" : "none",
+              borderRight:  (!isLastCol) ? "1px dashed #666" : "none",
+              borderBottom: (!isLastRow) ? "1px dashed #666" : "none",
               overflow: "hidden",
             }}>
               <SingleSticker bag={bag} depts={depts} siblingGroups={siblingGroups} />

@@ -1236,3 +1236,575 @@ On every startup:
 
 - **WhatsApp/SMS dispatch** — send customer notification when bag completed
 - **Customer portal** — read-only order status page via token link
+---
+
+## 28. CHANGES & ADDITIONS SINCE ORIGINAL SPEC
+*Updated: May 2026 — Sessions 1–10*
+
+---
+
+### 28.1 NEW: AURUM Lite (AUL) — PM Mobile App
+
+A companion Android app for the Production Manager running on the factory floor.
+
+**Stack:** React Native (Android APK) | Connects to AUD Express server on port 3737 via LAN
+**Current version:** v1.0.4
+**Network:** Works only on AURUM-FLOOR WiFi network (enforced in app UI)
+**Server:** Same 192.168.1.7:3737 as AUD
+
+**AUL Features:**
+- PM login via username/password (same credentials as AUD)
+- View all active bags and their current status
+- Issue and receive bags from departments
+- View PM Book balance
+- Stone issue and returns
+
+**Connection logic:**
+- App polls `GET /api/status` on launch
+- If server unreachable → Sign In button disabled, shows "Not connected to office" in red
+- Once connected → Sign In button enables
+
+**Network setup (Brasilgo):**
+- Router: ZTE F670LV9.0 at 192.168.1.1
+- AURUM-FLOOR = SSID3 (2.4GHz)
+- SSID Isolation: ON (phones can't talk to each other, but can reach server via router)
+- PM phone IP: 192.168.1.100 (DHCP binding by MAC: 3c:a8:0a:03:d1:8d)
+- IP Filter rule on router: blocks 192.168.1.100 from WAN (internet) — PM has no internet
+- Parental Controls on ZTE: kept OFF (it blocks ALL traffic including LAN — unusable)
+
+---
+
+### 28.2 NEW: AURUM Business (AUB)
+
+Separate Electron app for billing/invoicing running alongside AUD.
+
+**Location:** `D:\Aurum Business\aurum-business\` (note the space in folder name)
+**Main process:** `electron.js` (NOT main.js — critical difference from AUD)
+**Port:** 3738
+**Connects to AUD** for bag and receipt data
+
+---
+
+### 28.3 UPDATED: Receipt Approvals
+
+The CO "Receive Jewellery" tab was redesigned from a simple dropdown to a full approval workflow:
+
+- Bags arrive at CO with status "Pending CO Receipt"
+- CO sees all pending bags in a table with checkboxes
+- Can bulk approve multiple bags at once
+- Separate "Receive + Memo" button for individual receipt with Delivery Memo generation
+- Metal deliveries from PM also have checkbox bulk-receive table
+- `selectedBags` and `selectedDeliveries` are `Set()` states, cleared after each bulk receive
+
+---
+
+### 28.4 UPDATED: QC Pass/Fail Flow
+
+**Original spec** said QC pass → bag stays with PM, PM uses "Issue to Next" for soft delivery.
+**Actual implementation:**
+
+1. Bag issued to QC dept via normal Issue to Department
+2. PM receives bag back from QC (enters received weight)
+3. After receiving → mode switches to `"qc_decision"` → **Pass QC / Fail QC buttons appear**
+4. **QC Pass:**
+   - `bag.qcPassedAt = now()`
+   - `bag.currentDept = PROD_MGR`, `bag.pendingIssue = true`
+   - Creates pmBook COMPLETED_BAG entry, status="Ready for CO"
+   - **📦 Deliver to Central Office button** appears directly on bag panel
+   - PM clicks → `handleDeliverToCO` fires immediately
+5. **QC Fail:**
+   - Reason + suggested repair dept entered
+   - `bag.currentDept = PROD_MGR`
+   - Creates QC_FAIL_RETURN transaction + pmBook entry
+   - PM re-issues to repair dept
+6. After delivery → shows "✅ Delivered to CO — awaiting CO receipt & approval."
+
+**Key fix (Session 10):** `deptWasBeforeRecv` captures `bag.currentDept` at START of `handleReceive` before `updateDB` fires, to prevent stale closure issue.
+
+---
+
+### 28.5 UPDATED: Stone Settlement Dialog
+
+When a bag is received back from Setting department:
+
+- Dialog automatically appears after receipt
+- Shows all stone types issued (from stoneLedger) with fields:
+  - Set in Jewellery (pcs + carats)
+  - Returned Unused (pcs + carats)
+  - Broken (pcs + carats)
+- If no stones in ledger → shows informational message, dialog still opens
+- "Skip — Do Later in Stones Tab" option available
+
+**Key fix (Session 10):**
+- `deptWasBeforeRecv` captured before updateDB (same fix as QC)
+- Removed early exit when `stoneLedgerEntries.length === 0`
+- Stone totals use raw `carats/pieces` not `netCarats/netPieces`
+
+---
+
+### 28.6 UPDATED: Naming Changes
+
+| Old Name | New Name |
+|----------|----------|
+| Print Sheets | Print Job Sheets |
+| SHEET NO. | JOB SHEET NO. |
+| Customer Delivery Memo | Delivery Memo |
+| View Memo | View Production Sheet |
+| Delivery Memo (CO receipt view) | Production Sheet |
+
+---
+
+### 28.7 NEW: Print Job Sheets
+
+Two-panel layout in Print Job Sheets tab:
+
+**Left — Generic Blank Sheets:**
+- Starting JOB SHEET NO. (sequential, remembered between sessions)
+- Number of copies
+- Opens print preview with numbered A4 double-sided sheets
+
+**Right — Bag-Specific Sheets:**
+- Lists all bags with checkboxes (Active Only / All Bags toggle)
+- Design photo thumbnails from Design Master shown in list
+- Select one or multiple bags
+- Print button: "Print N Selected Bag Sheets"
+- Sheet pre-filled with: Bag No., Design ID, Category, Customer Name, Metal Type, Purity, Issued Weight, No. of Pieces, Created Date
+- Design photo printed on sheet (32×32mm box, top-right of bag identity section)
+- Sheet number = sequential from Starting Sheet Number (continues from generic)
+
+**AurumPrintSheet.html (Side B) — Stone Record table:**
+- Columns: #, Stone Type, Date Issued, Issued To, Issued Pcs, Issued Carats, **Set in Jwlry Pcs**, **Set in Jwlry Cts** *(new)*, Returned Pcs, Returned Carats, Broken Pcs, Remarks
+
+---
+
+### 28.8 NEW: Help & Support Button
+
+- Added to bottom of AUD sidebar above copyright
+- Click: takes screenshot → saves to desktop → opens WhatsApp to 919311564850
+- Pre-filled message includes: user, role, current screen, timestamp
+- Phone set in `main.js` line ~1087
+
+---
+
+### 28.9 NEW: Delivery Memo Form — Light Theme
+
+The Delivery Memo (CO tab) data entry form:
+- Background: `#F8F6F0` (light) with dark `#1a1a1a` text
+- Header: "DELIVERY MEMO — DATA ENTRY"
+- "Save & Record Customer Gold" button — includes italic note: "Only press if customer brought own gold for making"
+
+---
+
+### 28.10 NEW: Bag Sticker Print Improvements
+
+**Size options** (Label 2×3 removed, replaced with):
+- **A4 Full (2 cols × max rows)** ← default — fits 7 rows × 2 cols = 14 stickers per A4
+- A4 Half (2 per page)
+- A4 Third (3 per page)
+
+**Print settings:** `@page margin: 3mm` to maximise usable area
+
+**Sticker improvements (Session 10):**
+- Width: 100mm per sticker (was 3in/76mm)
+- Border: 1px solid #888 (was 0.5px #bbb)
+- Separator lines: 1px dashed #666 (was #bbb)
+- Bag No. font: 15pt (was 13pt)
+- Company name: 5pt #444 (was 4pt #888)
+- Order No.: 5.5pt #222 bold (was 5pt #555)
+
+---
+
+### 28.11 UPDATED: Data Schema Additions
+
+New fields added to `bags`:
+```js
+bags: [{
+  // ... existing fields ...
+  needsMetalFlag,      // bool — PM flagged bag needs metal from CO
+  needsStonesFlag,     // bool — PM flagged bag needs stones from CO
+}]
+```
+
+New fields added to `transactions`:
+```js
+transactions: [{
+  // ... existing fields ...
+  isQCFail,            // bool — true for QC_FAIL_RETURN type
+  qcFailReason,        // string — reason entered by PM
+  suggestedRepairDept, // string — dept suggested for repair
+  grossReceived,       // gross weight at receipt (stone bags)
+  stoneWeightAtReceipt,// stone weight at time of receipt
+  netMetalReceived,    // net metal (gross - stones) at receipt
+}]
+```
+
+New collections:
+```js
+db.designMaster = [{   // renamed/expanded from designs
+  id, designId, name, metalType, purity, category,
+  cadNo, photo, photos, createdAt,
+}]
+```
+
+---
+
+### 28.12 UPDATED: schemaVersion
+
+Current schema version: **3**
+
+Migration path:
+- v1 → v2: Added stone fields, pmStoneBook
+- v2 → v3: Added designMaster, needsMetalFlag, needsStonesFlag, qcPassedAt, pmBookDeliveredToCO
+
+---
+
+### 28.13 CRITICAL DEVELOPMENT RULES
+
+Learned through development — must never violate:
+
+1. **AUD uses `main.js`** (NOT electron.js). AUB uses `electron.js`
+2. **AUB folder has SPACE:** `D:\Aurum Business\` — always quote in scripts
+3. **No `manualChunks`** in vite.config.js — causes build failures
+4. **No `====`** in JSX/JS files — esbuild treats as syntax error
+5. **React hooks cannot be inside IIFE** — must be at component top level
+6. **No regex with `<` inside JSX** — JSX parser mangles it; use indexOf/slice instead
+7. **No IIFE `{(()=>{})()}`** inside `.map()` — esbuild rejects it; use `arr.map(item => { const x=...; return (...); })`
+8. **`ReceiptApprovalsView`** is standalone component, not IIFE
+9. **कारीगर** (correct spelling) not करीगर
+10. **Deploy = copy files → run `build-aurum.bat` as Administrator → reopen AUD**
+11. **Never Ctrl+Shift+R for production** — only works in dev mode
+
+---
+
+### 28.14 DEPLOYMENT & BACKUP
+
+**AUD Deployment:**
+```
+1. Copy MainApp.jsx → D:\Aurum\aurum-desktop\src\
+2. Copy AurumPrintSheet.html → D:\Aurum\aurum-desktop\public\
+3. Run build-aurum.bat as Administrator
+4. Reopen AUD once build completes
+```
+
+**Daily Backup ("Backup for the day"):**
+1. Generate SESSION handoff document
+2. Copy MainApp.jsx → MainApp.jsx.bak in same src\ folder
+3. Copy D:\Aurum → G:\Aurum (Explorer copy-paste)
+4. Copy D:\Aurum Business → G:\Aurum Business (Explorer copy-paste)
+5. GitHub push:
+```
+cd D:\Aurum\aurum-desktop
+git add .
+git commit -m "Session XX backup"
+git push
+```
+
+**File locations:**
+```
+Server data:   %APPDATA%\aurum\data\brasilgo\aurum-data.json
+Backup data:   %APPDATA%\aurum\data\brasilgo\aurum-data_backup_sessionXX.json
+AUD source:    D:\Aurum\aurum-desktop\src\MainApp.jsx
+AUB source:    D:\Aurum Business\aurum-business\src\App.jsx
+Print sheet:   D:\Aurum\aurum-desktop\public\AurumPrintSheet.html
+Handoffs:      D:\Aurum\SESSION*_HANDOFF.md
+GitHub:        https://github.com/digant-brasilgo/aurum-desktop
+```
+
+---
+
+### 28.15 CURRENT BALANCES (as of Session 10 — 28 May 2026)
+
+| Metal | Balance |
+|-------|---------|
+| CO Alloyed Gold 18K | 12.848g |
+| CO Alloyed Gold 14K | 74.682g |
+| CO Alloyed Silver 925 | 1,311.405g |
+
+*After duplicate receipt fix (Session 9) — removed IDs 318B8X2ZA and QA74JXAHP*
+
+
+---
+
+### 28.16 FEATURES ALREADY BUILT (from Section 26 Planned list)
+
+The following features listed as "planned" in Section 26 are **already implemented:**
+
+| Feature | Section | Status |
+|---------|---------|--------|
+| LAN Messaging | 26.2 | ✅ Built — Messages panel in top bar, To: dropdown, General/Bag-linked, Send |
+| Daily Production Digest | 26.5 | ✅ Built — "Daily Digest" button visible in bottom bar |
+| PM Daily To-Do Board | 26.3 | ✅ Built — appears on PM login |
+| CO Alert System | 26.1 | ✅ Built — chime + badge in top bar |
+| Karigar Performance Dashboard | 26.6 | ✅ Built — ranking with scores |
+| Bag Progress Timeline | 26.4 | ✅ Built — complete timeline in bag detail |
+| Data Migration Safety | 26.7 | ✅ Built — schemaVersion checks on startup |
+
+**Remaining genuinely unbuilt from Section 26:**
+- 26.8 Auto Backup to G: Drive (nightly) — currently manual
+- 26.9 Photo on Bag Receipt
+- 26.10 Mandatory Karigar Assignment
+- 26.11 Weight Gain Validation
+
+**Additional features still to build (identified Session 10):**
+- Stone Settlement skip protection
+- Flag: Needs Metal → auto-notify CO
+- Auto-sequential invoice numbering in AUB
+- Quick delivery memo reprint
+- Bag photo at creation time (not just in Design Master)
+
+---
+
+## 29. READY STOCK REGISTER & BARCODE TAG SYSTEM
+*Planned — Sessions 11+*
+
+---
+
+### 29.1 OVERVIEW
+
+Jewellery made for shop inventory (not for a specific customer order) follows the same production workflow in AUD but instead of delivering to a customer via CO receipt + Delivery Memo, it moves to a **Ready Stock Register**. Each stock piece gets a printed barcode tag (100×15mm thermal label) that can be scanned in AUD (for details) and AUB (for billing).
+
+---
+
+### 29.2 STOCK CUSTOMER
+
+A special customer named **"STOCK"** is created in the Customers master. When CO creates a bag intended for stock:
+- Customer = STOCK
+- No order number required
+- No delivery address required
+- Bag flows through production identically to any other bag
+
+This keeps the existing production workflow unchanged — no new bag types, no special handling until QC pass.
+
+---
+
+### 29.3 MOVE TO STOCK (at CO Receipt)
+
+The entire production and CO receipt flow is **identical to any other bag:**
+- Bag created with customer = STOCK
+- Full production workflow — Filing, Setting, Polishing, QC etc.
+- PM delivers to CO exactly as normal
+- CO generates Production Sheet / Delivery Memo exactly as normal
+- coAlloyedStock credited exactly as normal
+- All ledger entries made exactly as normal
+
+**Only difference — one extra button in CO receipt/history:**
+
+After CO has received the bag and generated the Delivery Memo, CO/Admin sees a **"→ Move to Ready Stock"** button on that receipt.
+
+Clicking it:
+- `bag.isStock = true`
+- `bag.stockedAt = now()`
+- `bag.suggestedPrice = enteredPrice` (CO enters suggested retail price per unit)
+- Bag appears in **Ready Stock Register** tab
+- That's it — nothing else changes
+
+**Data fields added to bags:**
+```js
+bags: [{
+  // ... existing fields ...
+  isStock,          // bool — true when moved to ready stock
+  stockedAt,        // timestamp when moved to stock
+  suggestedPrice,   // ₹ suggested retail price per unit (editable)
+  stockSoldAt,      // timestamp when sold
+  stockSoldTo,      // customerName when sold
+  stockSaleId,      // reference to AUB sale record
+  tagPrintedAt,     // timestamp of last tag print
+  tagPrintCount,    // number of times tag printed
+}]
+```
+
+---
+
+### 29.4 READY STOCK REGISTER (New Tab in AUD)
+
+**Location:** CO/Admin tab group — new tab "Ready Stock"
+
+**Views:**
+- **Available** — bags with `isStock=true`, `status="In Stock"`, not yet sold
+- **Sold** — bags with `stockSoldAt` set
+- **All**
+
+**Columns:** Bag No. | Design ID | Category | Metal/Purity | Gross Wt | Net Wt | Stone Wt | Units | Stocked Date | Suggested Price | Tag Printed | Actions
+
+**Actions per row:**
+- **Edit Price** — update suggestedPrice
+- **Print Tag** — sends TSPL to TSC printer (one tag per unit)
+- **View Details** — opens bag timeline/detail
+- **Mark Sold** — manual override if sold outside AUB
+
+**Summary cards at top:**
+- Total pieces in stock
+- Total metal weight (by purity)
+- Total stock value (at suggested prices)
+
+---
+
+### 29.5 BARCODE TAG DESIGN (100×15mm)
+
+TSC TTP-244 Pro thermal label, 100mm × 15mm with tail (rounded end).
+
+**Tag layout (left to right):**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ |||||||||||  BGG-R5    RN-26-05-018    18K Gold    Gross: 4.520g    │ ← 15mm tall
+│ |||||||||||  BGG-R5-U1  Net: 3.424g   Stone: 1.066g   ₹12,500      │
+└─────────────────────────────────────────────────────────────────────┘
+  ←barcode→    ←─────────────── text fields ──────────────────────────→
+  ~25mm         ~75mm
+```
+
+**Fields on tag:**
+- Barcode (Code 128): `{bagId}-U{unitNo}` e.g. `BGG-R5-U1`, `BGG-R5-U2`
+- Bag ID + Unit number
+- Design ID
+- Purity + Metal type
+- Gross weight (g)
+- Net metal weight (g)
+- Stone weight (g) — only if hasStones
+- Suggested price (₹) — printed large
+
+**One tag per unit** — if bag has 3 units (3 rings), prints 3 tags: BGG-R5-U1, BGG-R5-U2, BGG-R5-U3
+
+---
+
+### 29.6 PRINTING ARCHITECTURE
+
+**Challenge:** TSC printer is connected via USB to PM's PC on LAN. AUD server is at 192.168.1.7. Direct USB access from server is not possible.
+
+**Solution: Lightweight Print Agent on PM's PC**
+
+A tiny Node.js script (`aurum-print-agent.js`) runs as a background process on PM's PC:
+- Listens on HTTP port **3739**
+- Accepts: `POST /print` with TSPL commands in body
+- Sends TSPL to TSC printer via USB using `node-thermal-printer` or direct USB write
+- Returns: `{ ok: true }` or `{ ok: false, error: "..." }`
+
+**AUD server flow:**
+1. CO clicks "Print Tag" for a bag
+2. AUD generates TSPL commands for the tag
+3. AUD sends `POST http://192.168.1.{pmIP}:3739/print` with TSPL body
+4. Print agent on PM's PC receives → sends to TSC USB → tag prints
+5. AUD updates `bag.tagPrintedAt`, `bag.tagPrintCount`
+
+**PM PC IP:** To find — run `ipconfig` on PM's PC, look for IPv4 Address under WiFi adapter. Should be 192.168.1.x. Once confirmed, stored in AUD Settings as `printerAgentIP`.
+
+**TSPL commands for 100×15mm tag:**
+```
+SIZE 100 mm, 15 mm
+GAP 2 mm, 0
+DIRECTION 0
+CLS
+BARCODE 5,2,"128",30,1,0,2,2,"{bagId}-U{unitNo}"
+TEXT 40,2,"2",0,1,1,"{bagId}-U{unitNo}"
+TEXT 40,12,"2",0,1,1,"{designId}  {purity} {metalType}"
+TEXT 60,2,"2",0,1,1,"G:{grossWt}g  N:{netWt}g  S:{stoneWt}g"
+TEXT 80,2,"3",0,1,1,"Rs.{price}"
+PRINT 1
+```
+
+**Print agent installation:**
+- Copy `aurum-print-agent.js` to PM's PC
+- Run `node aurum-print-agent.js` — add to Windows startup
+- Or package as a tiny `.exe` using `pkg`
+
+---
+
+### 29.7 BARCODE SCAN — AUD
+
+**Global keyboard listener** added to AUD (in `MainApp.jsx`):
+- Listens for rapid sequential keystrokes (barcode scanners type ~50 chars/sec vs human ~5 chars/sec)
+- Pattern: 8+ characters in < 100ms, ending with Enter keypress
+- Detected barcode format: `BGG-R5-U1` (bagId + unit suffix)
+- Extracts bagId: `BGG-R5`
+
+**On scan:**
+- Navigates to **Movement tab** → pre-selects the bag
+- Opens **Stock Detail panel** showing:
+  - Design photo (from Design Master)
+  - All weights (gross, net, stone)
+  - Purity, metal type, category
+  - Suggested price
+  - Full production timeline
+  - Stone composition
+- Does NOT show customer details (stock item has no customer)
+
+**Scan works on any AUD screen** — no need to be on a specific tab first.
+
+---
+
+### 29.8 BARCODE SCAN — AUB (Billing)
+
+**In AUB billing/sales screen:**
+- Scan field auto-focused (or global listener)
+- Scan `BGG-R5-U1` → fetches bag details from AUD API (`GET /api/data`)
+- Auto-fills sale line item:
+  - Description: `{category} — {purity} {metalType} | Design: {designId}`
+  - Gross Wt, Net Wt, Stone Wt
+  - Suggested price (editable — different per customer)
+  - Unit: 1 piece
+- Multiple scans = multiple line items
+- Customer selector at top
+- Creates sale record linked to bagId + unitNo
+
+**On sale completion:**
+- AUB posts to AUD API: `POST /api/stock-sold` with `{ bagId, unitNo, customerId, salePrice, saleDate }`
+- AUD updates: `bag.stockSoldAt`, `bag.stockSoldTo`, `bag.stockSaleId`
+- Bag moves from "Available" to "Sold" in Ready Stock Register
+
+---
+
+### 29.9 DATA SCHEMA ADDITIONS
+
+```js
+db.readyStock = [{      // summary record per stocked bag
+  id,
+  bagId,                // reference to bags[]
+  stockedAt,
+  suggestedPrice,       // ₹ per unit
+  units: [{
+    unitNo,             // 1, 2, 3...
+    barcode,            // "BGG-R5-U1"
+    tagPrintedAt,
+    soldAt,
+    soldTo,
+    salePrice,
+    saleId,
+  }],
+  notes,
+}]
+```
+
+---
+
+### 29.10 SETTINGS ADDITIONS
+
+In AUD Settings tab → new sub-section **Print & Scan:**
+- `printerAgentIP` — IP address of PM's PC (e.g. 192.168.1.105)
+- `printerAgentPort` — default 3739
+- `barcodePrefix` — default blank (uses bag ID as-is)
+- Test Print button — prints a test label
+- Test Connection button — pings the print agent
+
+---
+
+### 29.11 BUILD PLAN (Sessions 11+)
+
+**Session 11:**
+1. Add STOCK customer to Customers master
+2. Add "→ Move to Ready Stock" button on CO receipt history
+3. Build Ready Stock Register tab (Available/Sold views)
+4. Add price editing per unit
+5. Find PM PC IP address (run ipconfig on PM's PC)
+
+**Session 12:**
+1. Build Print Agent (`aurum-print-agent.js`) for PM's PC
+2. Build TSPL generator in AUD
+3. Test tag printing end-to-end
+4. Add tag print tracking
+
+**Session 13:**
+1. Build barcode scan listener in AUD
+2. Build stock detail panel on scan
+3. Build AUB scan-to-bill integration
+4. Test full end-to-end flow
+
