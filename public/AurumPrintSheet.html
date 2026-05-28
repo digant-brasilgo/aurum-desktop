@@ -124,23 +124,31 @@
   </div>
 
   <!-- BAG IDENTITY -->
-  <div style="display:flex;flex-direction:column;gap:2.5mm;flex-shrink:0;">
-    <div class="fg c4">
-      <div class="field"><label>Bag No.</label><div class="line"></div></div>
-      <div class="field"><label>Design ID</label><div class="line"></div></div>
-      <div class="field"><label>Order No.</label><div class="line"></div></div>
-      <div class="field"><label>Category</label><div class="line"></div></div>
+  <div style="display:flex;gap:4mm;flex-shrink:0;align-items:flex-start;">
+    <div style="display:flex;flex-direction:column;gap:2.5mm;flex:1;">
+      <div class="fg c4">
+        <div class="field"><label>Bag No.</label><div class="line"></div></div>
+        <div class="field"><label>Design ID</label><div class="line"></div></div>
+        <div class="field"><label>Order No.</label><div class="line"></div></div>
+        <div class="field"><label>Category</label><div class="line"></div></div>
+      </div>
+      <div class="fg c4">
+        <div class="field" style="grid-column:span 2;"><label>Customer Name</label><div class="line"></div></div>
+        <div class="field"><label>Metal Type</label><div class="line"></div></div>
+        <div class="field"><label>Purity / Alloy</label><div class="line"></div></div>
+      </div>
+      <div class="fg c4">
+        <div class="field"><label>Issued Weight (g)</label><div class="line"></div></div>
+        <div class="field"><label>No. of Pieces</label><div class="line"></div></div>
+        <div class="field"><label>Bag Created Date</label><div class="line"></div></div>
+        <div class="field"><label>Target Date</label><div class="line"></div></div>
+      </div>
     </div>
-    <div class="fg c4">
-      <div class="field" style="grid-column:span 2;"><label>Customer Name</label><div class="line"></div></div>
-      <div class="field"><label>Metal Type</label><div class="line"></div></div>
-      <div class="field"><label>Purity / Alloy</label><div class="line"></div></div>
-    </div>
-    <div class="fg c4">
-      <div class="field"><label>Issued Weight (g)</label><div class="line"></div></div>
-      <div class="field"><label>No. of Pieces</label><div class="line"></div></div>
-      <div class="field"><label>Bag Created Date</label><div class="line"></div></div>
-      <div class="field"><label>Target Date</label><div class="line"></div></div>
+    <div style="flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:1mm;">
+      <div style="font-size:7px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#888;">Design Photo</div>
+      <div class="design-photo-box" style="width:32mm;height:32mm;border:1px solid #bbb;display:flex;align-items:center;justify-content:center;background:#f9f9f9;">
+        <span style="font-size:7px;color:#bbb;">No Photo</span>
+      </div>
     </div>
   </div>
 
@@ -244,6 +252,7 @@
         <th style="width:16mm;">Issued<br>Pcs</th>
         <th style="width:16mm;">Issued<br>Carats</th>
         <th style="width:16mm;">Set in<br>Jwlry Pcs</th>
+        <th style="width:16mm;">Set in<br>Jwlry Cts</th>
         <th style="width:16mm;">Returned<br>Pcs</th>
         <th style="width:16mm;">Returned<br>Carats</th>
         <th style="width:14mm;">Broken<br>Pcs</th>
@@ -251,16 +260,16 @@
       </tr>
     </thead>
     <tbody>
-      <tr><td class="shaded">1</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
-      <tr><td class="shaded">2</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
-      <tr><td class="shaded">3</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
-      <tr><td class="shaded">4</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
-      <tr><td class="shaded">5</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
-      <tr><td class="shaded">6</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
-      <tr><td class="shaded">7</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">1</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">2</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">3</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">4</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">5</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">6</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
+      <tr><td class="shaded">7</td><td></td><td></td><td></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td></tr>
       <tr class="trow">
         <td colspan="4" style="text-align:right;font-size:8px;letter-spacing:1px;padding-right:3mm;">TOTALS →</td>
-        <td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td>
+        <td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td class="tc bb"></td><td class="tc"></td><td></td>
       </tr>
     </tbody>
   </table>
