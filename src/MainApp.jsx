@@ -5428,8 +5428,9 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
                             unitNo:i+1, barcode:r.bagId+"-U"+(i+1),
                             tagPrintedAt:null, soldAt:null, soldTo:null, salePrice:null, saleId:null,
                           }));
+                          const rsId = "RS-"+(Date.now().toString(36)+Math.random().toString(36).slice(2,6)).toUpperCase();
                           prev.readyStock.push({
-                            id:"RS-"+(Date.now().toString(36)+Math.random().toString(36).slice(2,6)).toUpperCase(),
+                            id:rsId,
                             receiptId:r.id, bagId:r.bagId, designId:r.designId,
                             categoryLabel:r.categoryLabel, purity:r.purity, metalType:r.metalType,
                             grossWeight:r.grossWeight, netMetalWeight:r.netMetalWeight,
@@ -5438,8 +5439,22 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
                             suggestedPrice:parseFloat(stockPriceForm.price)||0,
                             stockedAt:new Date().toISOString(), units, notes:"",
                           });
+                          // Debit coAlloyedStock — metal moves from alloyed register to ready stock
+                          const purityFactors = {"24K":1,"22K":0.9167,"18K":0.75,"14K":0.5833,"925":0.925,"Silver 925":0.925,"9K":0.375};
+                          const netWt = r.netMetalWeight||0;
+                          const pureWt = netWt * (purityFactors[r.purity]||1);
+                          if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
+                          prev.coAlloyedStock.push({
+                            id:"RST-"+(Date.now().toString(36)), type:"READY_STOCK_TRANSFER", direction:"OUT",
+                            metalType:r.metalType, purity:r.purity,
+                            weight:netWt, pureEquiv:pureWt,
+                            bagNo:r.bagId, readyStockId:rsId,
+                            source:"Ready Stock Transfer — Bag "+r.bagId,
+                            date:new Date().toISOString(),
+                            notes:"Bag "+r.bagId+" transferred to Ready Stock — "+netWt.toFixed(3)+"g "+r.purity+" "+r.metalType+" out of alloyed register",
+                          });
                           if(!prev.auditLogs) prev.auditLogs=[];
-                          prev.auditLogs.push({ id:"AL-"+(Date.now().toString(36)), action:"MOVED_TO_STOCK", entityId:r.bagId, details:`Bag ${r.bagId} moved to Ready Stock @ ₹${stockPriceForm.price}/unit`, timestamp:new Date().toISOString() });
+                          prev.auditLogs.push({ id:"AL-"+(Date.now().toString(36)), action:"MOVED_TO_STOCK", entityId:r.bagId, details:"Bag "+r.bagId+" moved to Ready Stock @ ₹"+stockPriceForm.price+"/unit — "+netWt.toFixed(3)+"g debited from alloyed stock", timestamp:new Date().toISOString() });
                           return prev;
                         });
                         setStockPriceForm(null);
@@ -5704,6 +5719,8 @@ function ReadyStockView({ db, updateDB }) {
   const [rsView, setRsView] = React.useState("available");
   const [rsPrintItem, setRsPrintItem] = React.useState(null);
   const [rsEditPrice, setRsEditPrice] = React.useState(null);
+  const [rsReturnItem, setRsReturnItem] = React.useState(null);
+  const [rsReturnReason, setRsReturnReason] = React.useState("");
 
   const allStock = (db.readyStock||[]).slice().reverse();
   const available = allStock.filter(s=>s.units.some(u=>!u.soldAt));
@@ -5800,6 +5817,8 @@ function ReadyStockView({ db, updateDB }) {
             <div style={{ display:"flex", gap:"6px", justifyContent:"flex-end", flexWrap:"wrap" }}>
               <button className="btn btn-sm" onClick={()=>setRsEditPrice(rsEditPrice===item.id?null:item.id)}>✏ Price</button>
               <button className="btn btn-sm btn-gold" onClick={()=>setRsPrintItem(item)}>🏷 Print Tag</button>
+              <button className="btn btn-sm" style={{ borderColor:"#e06060", color:"#e06060" }}
+                onClick={()=>setRsReturnItem(item)}>↩ Return to Alloyed</button>
             </div>
           </div>
         </div>
@@ -5818,6 +5837,63 @@ function ReadyStockView({ db, updateDB }) {
     {rsPrintItem && (
       <ReadyStockTagPrint item={rsPrintItem} db={db} updateDB={updateDB} onClose={()=>setRsPrintItem(null)} />
     )}
+
+    {/* ── Return to Alloyed Stock Modal ── */}
+    {rsReturnItem && (
+      <div style={{ position:"fixed", top:0, left:0, right:0, bottom:0, background:"rgba(0,0,0,0.7)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }}>
+        <div className="card" style={{ width:"420px", padding:"24px", border:"1px solid #e06060" }}>
+          <div style={{ fontSize:"14px", fontWeight:"bold", color:"#e06060", marginBottom:"12px" }}>↩ Return to Alloyed Stock</div>
+          <div style={{ fontSize:"12px", color:"var(--text-secondary)", marginBottom:"16px" }}>
+            <div><strong>{rsReturnItem.bagId}</strong> — {rsReturnItem.designId} · {rsReturnItem.purity} {rsReturnItem.metalType}</div>
+            <div style={{ marginTop:"4px", color:"var(--text-dim)" }}>
+              Net metal: <strong>{(rsReturnItem.netMetalWeight||0).toFixed(3)}g</strong> will be credited back to Alloyed Metal Register.
+              Stone weight stays in CO Stone Book untouched.
+            </div>
+          </div>
+          <div style={{ marginBottom:"14px" }}>
+            <div style={{ fontSize:"11px", color:"var(--gold-dim)", marginBottom:"6px", letterSpacing:"1px" }}>REASON FOR RETURN:</div>
+            <select value={rsReturnReason} onChange={e=>setRsReturnReason(e.target.value)}
+              style={{ width:"100%", padding:"8px", background:"var(--dark)", border:"1px solid var(--dark4)", color:"var(--text)", borderRadius:"3px", fontSize:"12px" }}>
+              <option value="">— Select reason —</option>
+              <option value="Melted / Broken">Melted / Broken — returning as raw metal</option>
+              <option value="Data Entry Mistake">Data Entry Mistake — wrongly moved to stock</option>
+              <option value="Other">Other reason</option>
+            </select>
+          </div>
+          <div style={{ display:"flex", gap:"8px" }}>
+            <button className="btn" style={{ flex:1, borderColor:"#e06060", color:"#e06060" }}
+              onClick={()=>{
+                if(!rsReturnReason) { alert("Please select a reason."); return; }
+                updateDB(prev=>{
+                  // Remove from readyStock
+                  prev.readyStock = (prev.readyStock||[]).filter(s=>s.id!==rsReturnItem.id);
+                  // Credit coAlloyedStock — metal returns to alloyed register
+                  const purityFactors = {"24K":1,"22K":0.9167,"18K":0.75,"14K":0.5833,"925":0.925,"Silver 925":0.925,"9K":0.375};
+                  const netWt = rsReturnItem.netMetalWeight||0;
+                  const pureWt = netWt * (purityFactors[rsReturnItem.purity]||1);
+                  if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
+                  prev.coAlloyedStock.push({
+                    id:"RSR-"+(Date.now().toString(36)), type:"READY_STOCK_RETURN", direction:"IN",
+                    metalType:rsReturnItem.metalType, purity:rsReturnItem.purity,
+                    weight:netWt, pureEquiv:pureWt,
+                    bagNo:rsReturnItem.bagId,
+                    source:"Ready Stock Return — Bag "+rsReturnItem.bagId+" ("+rsReturnReason+")",
+                    date:new Date().toISOString(),
+                    notes:"Bag "+rsReturnItem.bagId+" returned from Ready Stock to Alloyed Register — "+netWt.toFixed(3)+"g "+rsReturnItem.purity+" "+rsReturnItem.metalType+" — Reason: "+rsReturnReason,
+                  });
+                  // Audit log
+                  if(!prev.auditLogs) prev.auditLogs=[];
+                  prev.auditLogs.push({ id:"AL-"+(Date.now().toString(36)), action:"RETURNED_FROM_STOCK", entityId:rsReturnItem.bagId, details:"Bag "+rsReturnItem.bagId+" returned from Ready Stock — "+netWt.toFixed(3)+"g credited to alloyed — Reason: "+rsReturnReason, timestamp:new Date().toISOString() });
+                  return prev;
+                });
+                setRsReturnItem(null);
+                setRsReturnReason("");
+              }}>↩ Confirm Return</button>
+            <button className="btn" onClick={()=>{ setRsReturnItem(null); setRsReturnReason(""); }}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    )}
   </div>
   );
 }
@@ -5827,207 +5903,214 @@ function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
   const [selectedUnits, setSelectedUnits] = React.useState(
     item.units.filter(u=>!u.soldAt).map(u=>u.unitNo)
   );
+  const [agentStatus, setAgentStatus] = React.useState("idle"); // idle | checking | ok | error
+  const [agentError, setAgentError] = React.useState("");
+  const [printing, setPrinting] = React.useState(false);
+  const [printerName, setPrinterName] = React.useState("");
+  const [availPrinters, setAvailPrinters] = React.useState([]);
 
+  const AGENT_URL = "http://192.168.1.9:3739";
   const design = (db.designMaster||db.designs||[]).find(d=>d.id===item.designId||d.designId===item.designId);
   const photo = design?.photo||design?.photos?.[0]||null;
   const hasStones = item.stoneWeightGrams > 0;
 
-  function handlePrint() {
+  // Check agent on mount
+  React.useEffect(()=>{
+    checkAgent();
+  }, []);
+
+  async function checkAgent() {
+    setAgentStatus("checking");
+    setAgentError("");
+    try {
+      const res = await fetch(AGENT_URL+"/status", { signal: AbortSignal.timeout(3000) });
+      const data = await res.json();
+      if(data.ok) {
+        setAgentStatus("ok");
+        // Fetch printer list
+        try {
+          const pr = await fetch(AGENT_URL+"/printers");
+          const pd = await pr.json();
+          if(pd.printers) setAvailPrinters(pd.printers);
+        } catch(e) {}
+      } else {
+        setAgentStatus("error");
+        setAgentError("Agent responded but not OK");
+      }
+    } catch(e) {
+      setAgentStatus("error");
+      setAgentError("Cannot reach Print Agent at "+AGENT_URL+". Is it running on PM's PC?");
+    }
+  }
+
+  function generateTSPL(unitNo) {
+    const barcode = item.bagId+"-U"+unitNo;
+    const price = "Rs."+(item.suggestedPrice||0).toLocaleString("en-IN");
+    const grossWt = (item.grossWeight||0).toFixed(3)+"g";
+    const netWt = (item.netMetalWeight||0).toFixed(3)+"g";
+    const stoneWt = hasStones ? (item.stoneWeightGrams||0).toFixed(3)+"g" : "";
+    const carats = hasStones ? (item.totalStoneCarats||0).toFixed(2)+"ct" : "";
+    const purity = (item.purity||"")+" "+(item.metalType||"");
+    const designId = item.designId||"";
+    const cat = (item.categoryLabel||"")+" U"+unitNo+"/"+item.unitCount;
+
+    // TSPL for TSC TTP-244 Pro
+    // Label: 100mm wide x 57mm tall (2 faces of 15mm + fold + tail 27mm)
+    // Units in dots at 203dpi: 1mm = ~8 dots
+    // Face 1: top 15mm = 0-120 dots | Face 2: 120-240 dots | Tail: 240-456 dots
+    const Q = String.fromCharCode(34);
+    const lines = [
+      "SIZE 100 mm, 57 mm",
+      "GAP 2 mm, 0",
+      "DIRECTION 0",
+      "REFERENCE 0,0",
+      "CLS",
+      "BARCODE 4,8,"+Q+"128"+Q+",60,1,0,2,2,"+Q+barcode+Q,
+      "TEXT 4,72,"+Q+"1"+Q+",0,1,1,"+Q+barcode+Q,
+      "TEXT 220,8,"+Q+"2"+Q+",0,1,1,"+Q+designId+Q,
+      "TEXT 220,36,"+Q+"1"+Q+",0,1,1,"+Q+purity+Q,
+      "TEXT 220,54,"+Q+"1"+Q+",0,1,1,"+Q+cat+Q,
+      "TEXT 220,76,"+Q+"3"+Q+",0,1,1,"+Q+price+Q,
+      "BAR 0,122,800,1",
+      "TEXT 4,130,"+Q+"1"+Q+",0,1,1,"+Q+"GROSS"+Q,
+      "TEXT 220,130,"+Q+"2"+Q+",0,1,1,"+Q+grossWt+Q,
+      "TEXT 4,152,"+Q+"1"+Q+",0,1,1,"+Q+"NET METAL"+Q,
+      "TEXT 220,152,"+Q+"2"+Q+",0,1,1,"+Q+netWt+Q,
+    ];
+
+    if(hasStones) {
+      lines.push("TEXT 4,174,"+Q+"1"+Q+",0,1,1,"+Q+"STONE"+Q);
+      lines.push("TEXT 220,174,"+Q+"2"+Q+",0,1,1,"+Q+stoneWt+Q);
+      lines.push("TEXT 4,196,"+Q+"1"+Q+",0,1,1,"+Q+"CARATS"+Q);
+      lines.push("TEXT 220,196,"+Q+"2"+Q+",0,1,1,"+Q+carats+Q);
+    }
+
+    lines.push("TEXT 4,228,"+Q+"1"+Q+",0,1,1,"+Q+"BRASILGO AURUM"+Q);
+    lines.push("BOX 0,0,800,120,1");
+    lines.push("BOX 0,122,800,244,1");
+    lines.push("PRINT 1,1");
+    lines.push("");
+
+    return lines.join("\r\n");
+  }
+
+  async function handlePrintTSPL() {
     if(selectedUnits.length===0) return alert("Select at least one unit to print.");
-
-    // Mark tags as printed
-    updateDB(prev=>{
-      const s = prev.readyStock.find(x=>x.id===item.id);
-      if(s) s.units.forEach(u=>{ if(selectedUnits.includes(u.unitNo)) u.tagPrintedAt=new Date().toISOString(); });
-      return prev;
-    });
-
-    const w = window.open("","_blank");
-    const tagsHtml = selectedUnits.map(unitNo=>{
-      const barcode = item.bagId+"-U"+unitNo;
-      return `
-      <div class="tag-wrap">
-        <!-- FACE 1: Identity & Price -->
-        <div class="face face1">
-          <div class="face1-left">
-            <svg class="barcode" id="bc-${barcode}"></svg>
-            <div class="bc-label">${barcode}</div>
-          </div>
-          <div class="face1-right">
-            <div class="f1-design">${item.designId||""}</div>
-            <div class="f1-purity">${item.purity} ${item.metalType}</div>
-            <div class="f1-cat">${item.categoryLabel||""} · U${unitNo}/${item.unitCount}</div>
-            <div class="f1-price">₹${(item.suggestedPrice||0).toLocaleString("en-IN")}</div>
-          </div>
-        </div>
-        <!-- Fold line -->
-        <div class="fold-line"></div>
-        <!-- FACE 2: Weights & Details -->
-        <div class="face face2">
-          <div class="face2-left">
-            ${photo ? `<img src="${photo}" class="tag-photo" />` : `<div class="tag-photo-placeholder">💍</div>`}
-          </div>
-          <div class="face2-right">
-            <div class="f2-row"><span class="f2-label">GROSS</span><span class="f2-val">${(item.grossWeight||0).toFixed(3)}g</span></div>
-            <div class="f2-row"><span class="f2-label">NET METAL</span><span class="f2-val">${(item.netMetalWeight||0).toFixed(3)}g</span></div>
-            ${hasStones ? `<div class="f2-row"><span class="f2-label">STONE</span><span class="f2-val">${(item.stoneWeightGrams||0).toFixed(3)}g</span></div>` : ""}
-            ${hasStones ? `<div class="f2-row"><span class="f2-label">CARATS</span><span class="f2-val">${(item.totalStoneCarats||0).toFixed(2)}ct</span></div>` : ""}
-            <div class="f2-brand">BRASILGO · AURUM</div>
-          </div>
-        </div>
-        <!-- Tail -->
-        <div class="tail"></div>
-      </div>`;
-    }).join("");
-
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
-    <style>
-      * { margin:0; padding:0; box-sizing:border-box; }
-      body { background:#fff; font-family:Arial,sans-serif; }
-      @page { size: 100mm 57mm; margin:0; }
-      @media print { body { margin:0; } .no-print { display:none; } }
-
-      .tag-wrap {
-        width:100mm; height:57mm;
-        display:flex; flex-direction:column;
-        page-break-after:always;
-        overflow:hidden;
-      }
-      .face {
-        width:100mm; height:15mm;
-        display:flex; flex-direction:row;
-        overflow:hidden;
-        background:#fff;
-      }
-      .face1 { border:0.5px solid #333; border-bottom:none; }
-      .face2 { border:0.5px solid #333; border-top:none; }
-      .fold-line {
-        width:100mm; height:0;
-        border-top:1px dashed #aaa;
-      }
-      .tail {
-        width:35mm; height:27mm;
-        border:0.5px solid #333; border-top:none;
-        border-radius:0 0 8mm 8mm;
-        margin:0 auto;
-      }
-
-      /* FACE 1 */
-      .face1-left {
-        width:28mm; flex-shrink:0;
-        display:flex; flex-direction:column;
-        align-items:center; justify-content:center;
-        padding:1mm;
-        border-right:0.5px solid #ccc;
-      }
-      .barcode { width:26mm; height:10mm; }
-      .bc-label { font-size:5pt; text-align:center; color:#333; margin-top:0.5mm; letter-spacing:0.3px; }
-      .face1-right {
-        flex:1; padding:2mm 2mm 1mm 2mm;
-        display:flex; flex-direction:column; justify-content:space-between;
-      }
-      .f1-design { font-size:8pt; font-weight:bold; color:#000; letter-spacing:0.3px; }
-      .f1-purity { font-size:7pt; color:#333; }
-      .f1-cat { font-size:6pt; color:#666; }
-      .f1-price { font-size:11pt; font-weight:900; color:#000; letter-spacing:0.5px; }
-
-      /* FACE 2 */
-      .face2-left {
-        width:15mm; flex-shrink:0;
-        display:flex; align-items:center; justify-content:center;
-        border-right:0.5px solid #ccc;
-        padding:1mm;
-      }
-      .tag-photo { width:13mm; height:13mm; object-fit:cover; border-radius:1mm; }
-      .tag-photo-placeholder { font-size:14pt; }
-      .face2-right {
-        flex:1; padding:1.5mm 2mm;
-        display:flex; flex-direction:column; justify-content:space-between;
-      }
-      .f2-row { display:flex; justify-content:space-between; align-items:baseline; }
-      .f2-label { font-size:5.5pt; color:#666; text-transform:uppercase; letter-spacing:0.3px; }
-      .f2-val { font-size:7pt; font-weight:bold; color:#000; }
-      .f2-brand { font-size:4.5pt; color:#aaa; text-align:right; letter-spacing:0.5px; margin-top:auto; }
-
-      .no-print { position:fixed; top:8px; right:8px; z-index:999; }
-    </style>
-    </head><body>
-    <button class="no-print" onclick="window.print()">🖨 Print</button>
-    ${tagsHtml}
-    <script>
-      window.onload = function() {
-        document.querySelectorAll('.barcode').forEach(function(el) {
-          var code = el.parentElement.nextElementSibling ? 
-            el.parentElement.querySelector('.bc-label').textContent : 
-            el.closest('.face1-left').querySelector('.bc-label').textContent;
-          JsBarcode(el, code.trim(), { format:"CODE128", displayValue:false, width:1.2, height:28, margin:0, background:"#ffffff", lineColor:"#000000" });
+    if(agentStatus!=="ok") return alert("Print Agent not connected. Please check.");
+    setPrinting(true);
+    try {
+      for(const unitNo of selectedUnits) {
+        const tspl = generateTSPL(unitNo);
+        const res = await fetch(AGENT_URL+"/print", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ tspl, printer: printerName||undefined }),
         });
-        setTimeout(function(){ window.print(); }, 1200);
-      };
-    </script>
-    </body></html>`);
-    w.document.close();
+        const data = await res.json();
+        if(!data.ok) throw new Error(data.error||"Print failed");
+      }
+      // Mark tags as printed
+      updateDB(prev=>{
+        const s = prev.readyStock.find(x=>x.id===item.id);
+        if(s) s.units.forEach(u=>{ if(selectedUnits.includes(u.unitNo)) u.tagPrintedAt=new Date().toISOString(); });
+        return prev;
+      });
+      alert("✅ "+selectedUnits.length+" tag(s) sent to TSC printer!");
+    } catch(e) {
+      alert("Print error: "+e.message);
+    } finally {
+      setPrinting(false);
+    }
   }
 
   return (
     <div style={{ position:"fixed", top:0, left:0, right:0, bottom:0, background:"rgba(0,0,0,0.7)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }}>
-      <div className="card card-gold" style={{ width:"500px", maxHeight:"80vh", overflowY:"auto", padding:"20px" }}>
+      <div className="card card-gold" style={{ width:"520px", maxHeight:"85vh", overflowY:"auto", padding:"20px" }}>
         <div className="section-title"><span className="section-title-accent"></span>🏷 Print Jewellery Tags — {item.bagId}</div>
 
-        <div style={{ fontSize:"12px", color:"var(--text-dim)", marginBottom:"14px" }}>
-          Tag size: 100×15mm per face · Design photo on Face 2 · Barcode + Price on Face 1<br/>
-          Print on TSC TTP-244 Pro · 100mm × 57mm label (2 faces + tail)
+        {/* Agent status */}
+        <div style={{ marginBottom:"14px", padding:"10px 14px", borderRadius:"4px",
+          background:agentStatus==="ok"?"rgba(77,184,138,0.1)":agentStatus==="error"?"rgba(220,80,80,0.1)":"var(--dark3)",
+          border:"1px solid "+(agentStatus==="ok"?"#4db88a":agentStatus==="error"?"#e06060":"var(--dark4)") }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <div style={{ fontSize:"12px", color:agentStatus==="ok"?"#4db88a":agentStatus==="error"?"#e06060":"var(--text-dim)" }}>
+              {agentStatus==="checking" && "⏳ Connecting to Print Agent..."}
+              {agentStatus==="ok" && "✅ Print Agent connected — TSC TTP-244 Pro ready"}
+              {agentStatus==="error" && "❌ "+agentError}
+              {agentStatus==="idle" && "Print Agent status unknown"}
+            </div>
+            <button className="btn btn-sm" onClick={checkAgent} style={{ fontSize:"10px" }}>↺ Retry</button>
+          </div>
+          {agentStatus==="error" && (
+            <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"6px" }}>
+              Run START_PRINT_AGENT.bat on PM's PC (192.168.1.9) first.
+            </div>
+          )}
+        </div>
+
+        {/* Printer selector */}
+        {agentStatus==="ok" && availPrinters.length>0 && (
+          <div style={{ marginBottom:"14px" }}>
+            <div style={{ fontSize:"11px", color:"var(--gold-dim)", marginBottom:"6px", letterSpacing:"1px" }}>PRINTER:</div>
+            <select value={printerName} onChange={e=>setPrinterName(e.target.value)}
+              style={{ width:"100%", padding:"7px", background:"var(--dark)", border:"1px solid var(--dark4)", color:"var(--text)", borderRadius:"3px", fontSize:"12px" }}>
+              <option value="">— Auto detect (TTP-244 Pro) —</option>
+              {availPrinters.map(p=><option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Tag info */}
+        <div style={{ fontSize:"12px", color:"var(--text-dim)", marginBottom:"14px", padding:"10px", background:"var(--dark3)", borderRadius:"4px" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"8px" }}>
+            <div>
+              <div style={{ color:"var(--gold-dim)", fontSize:"10px", marginBottom:"4px" }}>FACE 1 — IDENTITY</div>
+              <div>Barcode · {item.bagId}-Ux</div>
+              <div>{item.designId} · {item.purity} {item.metalType}</div>
+              <div style={{ color:"var(--gold)", fontWeight:"bold" }}>₹{(item.suggestedPrice||0).toLocaleString("en-IN")}</div>
+            </div>
+            <div>
+              <div style={{ color:"var(--gold-dim)", fontSize:"10px", marginBottom:"4px" }}>FACE 2 — WEIGHTS</div>
+              <div>Gross: {(item.grossWeight||0).toFixed(3)}g</div>
+              <div>Net Metal: {(item.netMetalWeight||0).toFixed(3)}g</div>
+              {hasStones && <div>Stone: {(item.stoneWeightGrams||0).toFixed(3)}g · {(item.totalStoneCarats||0).toFixed(2)}ct</div>}
+            </div>
+          </div>
         </div>
 
         {/* Unit selector */}
         <div style={{ marginBottom:"14px" }}>
           <div style={{ fontSize:"11px", color:"var(--gold-dim)", marginBottom:"8px", letterSpacing:"1px" }}>SELECT UNITS TO PRINT:</div>
-          <div style={{ display:"flex", gap:"8px", flexWrap:"wrap" }}>
+          <div style={{ display:"flex", gap:"8px", marginBottom:"8px" }}>
             <button className="btn btn-sm" onClick={()=>setSelectedUnits(item.units.filter(u=>!u.soldAt).map(u=>u.unitNo))}>All Available</button>
             <button className="btn btn-sm" onClick={()=>setSelectedUnits([])}>None</button>
           </div>
-          <div style={{ display:"flex", gap:"8px", flexWrap:"wrap", marginTop:"8px" }}>
+          <div style={{ display:"flex", gap:"8px", flexWrap:"wrap" }}>
             {item.units.map(u=>(
-              <div key={u.unitNo} onClick={()=>setSelectedUnits(prev=>prev.includes(u.unitNo)?prev.filter(x=>x!==u.unitNo):[...prev,u.unitNo])}
-                style={{ padding:"6px 12px", borderRadius:"3px", cursor:u.soldAt?"not-allowed":"pointer", fontSize:"12px",
+              <div key={u.unitNo} onClick={()=>!u.soldAt&&setSelectedUnits(prev=>prev.includes(u.unitNo)?prev.filter(x=>x!==u.unitNo):[...prev,u.unitNo])}
+                style={{ padding:"6px 14px", borderRadius:"3px", cursor:u.soldAt?"not-allowed":"pointer", fontSize:"12px",
                   background:selectedUnits.includes(u.unitNo)?"var(--gold)":"var(--dark3)",
                   color:selectedUnits.includes(u.unitNo)?"#000":u.soldAt?"var(--text-dim)":"var(--text-secondary)",
                   border:"1px solid "+(selectedUnits.includes(u.unitNo)?"var(--gold)":"var(--dark4)"),
                   opacity:u.soldAt?0.5:1 }}>
-                U{u.unitNo} {u.tagPrintedAt?"🔄":""}
-                {u.soldAt && " (sold)"}
+                U{u.unitNo}{u.tagPrintedAt?" 🔄":""}{u.soldAt?" (sold)":""}
               </div>
             ))}
           </div>
         </div>
 
-        {/* Tag preview */}
-        <div style={{ background:"var(--dark3)", border:"1px solid var(--dark4)", borderRadius:"4px", padding:"12px", marginBottom:"14px", fontSize:"11px", color:"var(--text-dim)" }}>
-          <div style={{ marginBottom:"6px", color:"var(--gold-dim)", fontWeight:"bold" }}>TAG PREVIEW ({selectedUnits.length} tag{selectedUnits.length!==1?"s":""})</div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"8px" }}>
-            <div><div style={{ color:"var(--text-dim)", fontSize:"10px" }}>FACE 1</div>
-              <div>Barcode · {item.bagId}-Ux</div>
-              <div style={{ fontWeight:"bold", color:"var(--gold)", fontSize:"13px" }}>₹{(item.suggestedPrice||0).toLocaleString("en-IN")}</div>
-              <div>{item.designId} · {item.purity} {item.metalType}</div>
-            </div>
-            <div><div style={{ color:"var(--text-dim)", fontSize:"10px" }}>FACE 2</div>
-              <div>Gross: {(item.grossWeight||0).toFixed(3)}g</div>
-              <div>Net: {(item.netMetalWeight||0).toFixed(3)}g</div>
-              {hasStones && <div>Stone: {(item.stoneWeightGrams||0).toFixed(3)}g · {(item.totalStoneCarats||0).toFixed(2)}ct</div>}
-              <div style={{ color:"var(--text-dim)", fontSize:"10px" }}>+ Design photo</div>
-            </div>
-          </div>
-        </div>
-
         <div style={{ display:"flex", gap:"8px" }}>
-          <button className="btn btn-gold" style={{ flex:1 }} onClick={handlePrint}>🖨 Open Print Preview ({selectedUnits.length} tags)</button>
+          <button className="btn btn-gold" style={{ flex:1, opacity:printing||agentStatus!=="ok"?0.6:1 }}
+            onClick={handlePrintTSPL} disabled={printing||agentStatus!=="ok"}>
+            {printing?"⏳ Printing...":"🖨 Print "+selectedUnits.length+" Tag"+(selectedUnits.length!==1?"s":"")+" to TSC"}
+          </button>
           <button className="btn" onClick={onClose}>✕ Close</button>
         </div>
       </div>
     </div>
   );
 }
+
 
 function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId, onInitialBagConsumed }) {
   const [stickerBag, setStickerBag] = useState(null);

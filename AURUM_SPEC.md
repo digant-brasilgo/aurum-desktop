@@ -1808,3 +1808,73 @@ In AUD Settings tab → new sub-section **Print & Scan:**
 3. Build AUB scan-to-bill integration
 4. Test full end-to-end flow
 
+
+---
+
+## 30. SESSION 11 UPDATES
+
+### 30.1 Ready Stock Register — Complete Metal & Stone Accounting
+
+**Full accounting flow:**
+
+| Event | Alloyed Metal Register (coAlloyedStock) | Gemstone Ledger (coStoneStock) |
+|-------|----------------------------------------|-------------------------------|
+| CO receives from PM | IN — BAG_RETURN (net metal weight) | IN — BAG_RETURN_SET (stones set in jewellery) |
+| Move to Ready Stock | OUT — READY_STOCK_TRANSFER (net metal) | No change — stays in Gemstone Ledger |
+| Return to Alloyed Stock | IN — READY_STOCK_RETURN (net metal) | No change |
+| Deliver/Sell to customer | OUT — CUSTOMER_DELIVERY (net metal) | OUT — CUSTOMER_DELIVERY (stones) |
+
+**Key rule:** Gemstone Ledger is only debited at final delivery/sale to customer — never when moving between Alloyed Stock and Ready Stock.
+
+### 30.2 Return to Alloyed Stock Feature
+- Button: **↩ Return to Alloyed** in Ready Stock Register per item
+- Reason required: Melted/Broken | Data Entry Mistake | Other
+- Creates READY_STOCK_RETURN IN entry in coAlloyedStock
+- Removes item from db.readyStock
+- Audit log entry created
+- Gemstone Ledger untouched
+
+### 30.3 TSC TTP-244 Pro Direct Printing System
+
+**Architecture:**
+- Print Agent (`aurum-print-agent.js` v1.1) runs on PM's PC (192.168.1.9:3739)
+- AUD sends TSPL via `POST http://192.168.1.9:3739/print`
+- Agent writes TSPL to temp .prn file → `copy /b tmpfile USB001`
+- USB001 = TSC TTP-244 Pro port on PM's PC
+- PM hostname: DESKTOP-G2TJ6G7
+
+**Tag dimensions:**
+- Label roll: 100mm wide × 57mm per label (2mm gap)
+- Face 1: 15mm tall (identity + barcode + price)
+- Fold line: 1mm
+- Face 2: 15mm tall (weights + photo description)
+- Tail: 26mm (rounded, goes inside jewellery)
+
+**TSPL key commands:**
+```
+SIZE 100 mm, 57 mm
+GAP 2 mm, 0
+DIRECTION 0
+BARCODE x,y,"128",height,readable,rotation,narrow,wide,"data"
+TEXT x,y,"font",rotation,xmul,ymul,"text"
+BOX x1,y1,x2,y2,thickness
+BAR x,y,width,height
+PRINT copies,sets
+```
+Note: Quotes in TSPL strings use `String.fromCharCode(34)` in JSX to avoid parse errors.
+
+**Current status:** TSPL reaches printer (USB001 copy success) but printer not outputting — needs TSC Console configuration (label size, gap settings). Download: https://www.tscprinters.com/cms/en/support/download
+
+### 30.4 Print Agent Files
+- `C:\Aurum-Print\aurum-print-agent.js` — Node.js HTTP server
+- `C:\Aurum-Print\START_PRINT_AGENT.bat` — startup script
+- Log: `C:\Users\user\Desktop\aurum-print-agent.log`
+- Endpoints: GET /status, GET /printers, POST /print
+
+### 30.5 Barcode Scan Listener (AUD — Global)
+- `useEffect` with `window.addEventListener('keydown')` in main App component
+- Detects scanner speed: chars arriving < 80ms apart, min 5 chars, ends with Enter
+- Extracts bagId from barcode: BGG-R5-U1 → BGG-R5
+- Shows popup bottom-right: design photo, weights, price, "→ Open in Movement" button
+- State: `scanResult` in main App component
+
