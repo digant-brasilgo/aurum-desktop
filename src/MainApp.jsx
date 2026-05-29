@@ -5955,39 +5955,36 @@ function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
     const cat = (item.categoryLabel||"")+" U"+unitNo+"/"+item.unitCount;
 
     // TSPL for TSC TTP-244 Pro
-    // Label: 100mm wide x 57mm tall (2 faces of 15mm + fold + tail 27mm)
-    // Units in dots at 203dpi: 1mm = ~8 dots
-    // Face 1: top 15mm = 0-120 dots | Face 2: 120-240 dots | Tail: 240-456 dots
+    // Label: 100mm wide x 15mm tall (one label per face)
+    // At 203dpi: 1mm = ~8 dots → 100mm = 800 dots wide, 15mm = 120 dots tall
+    // All y coordinates must stay within 0–110 dots
     const Q = String.fromCharCode(34);
     const lines = [
-      "SIZE 100 mm, 57 mm",
-      "GAP 2 mm, 0",
+      "SIZE 100 mm, 15 mm",
+      "GAP 3 mm, 0",
       "DIRECTION 0",
       "REFERENCE 0,0",
       "CLS",
-      "BARCODE 4,8,"+Q+"128"+Q+",60,1,0,2,2,"+Q+barcode+Q,
-      "TEXT 4,72,"+Q+"1"+Q+",0,1,1,"+Q+barcode+Q,
-      "TEXT 220,8,"+Q+"2"+Q+",0,1,1,"+Q+designId+Q,
-      "TEXT 220,36,"+Q+"1"+Q+",0,1,1,"+Q+purity+Q,
-      "TEXT 220,54,"+Q+"1"+Q+",0,1,1,"+Q+cat+Q,
-      "TEXT 220,76,"+Q+"3"+Q+",0,1,1,"+Q+price+Q,
-      "BAR 0,122,800,1",
-      "TEXT 4,130,"+Q+"1"+Q+",0,1,1,"+Q+"GROSS"+Q,
-      "TEXT 220,130,"+Q+"2"+Q+",0,1,1,"+Q+grossWt+Q,
-      "TEXT 4,152,"+Q+"1"+Q+",0,1,1,"+Q+"NET METAL"+Q,
-      "TEXT 220,152,"+Q+"2"+Q+",0,1,1,"+Q+netWt+Q,
+      // Barcode on left — height 70 dots, no human readable (we print it as TEXT below)
+      "BARCODE 4,4,"+Q+"128"+Q+",70,0,0,2,2,"+Q+barcode+Q,
+      // Barcode text below barcode
+      "TEXT 4,78,"+Q+"1"+Q+",0,1,1,"+Q+barcode+Q,
+      // Design ID + purity — middle section
+      "TEXT 220,4,"+Q+"1"+Q+",0,1,1,"+Q+designId+" "+purity+Q,
+      // Category + unit
+      "TEXT 220,30,"+Q+"1"+Q+",0,1,1,"+Q+cat+Q,
+      // Weights on one line
+      "TEXT 220,56,"+Q+"1"+Q+",0,1,1,"+Q+"G:"+grossWt+" N:"+netWt+(hasStones?" S:"+stoneWt:"")+Q,
+      // Price — large, right side
+      "TEXT 530,8,"+Q+"3"+Q+",0,1,1,"+Q+price+Q,
+      // Carats if stones
     ];
 
     if(hasStones) {
-      lines.push("TEXT 4,174,"+Q+"1"+Q+",0,1,1,"+Q+"STONE"+Q);
-      lines.push("TEXT 220,174,"+Q+"2"+Q+",0,1,1,"+Q+stoneWt+Q);
-      lines.push("TEXT 4,196,"+Q+"1"+Q+",0,1,1,"+Q+"CARATS"+Q);
-      lines.push("TEXT 220,196,"+Q+"2"+Q+",0,1,1,"+Q+carats+Q);
+      lines.push("TEXT 530,60,"+Q+"1"+Q+",0,1,1,"+Q+carats+Q);
     }
 
-    lines.push("TEXT 4,228,"+Q+"1"+Q+",0,1,1,"+Q+"BRASILGO AURUM"+Q);
-    lines.push("BOX 0,0,800,120,1");
-    lines.push("BOX 0,122,800,244,1");
+    lines.push("TEXT 530,78,"+Q+"1"+Q+",0,1,1,"+Q+"BRASILGO"+Q);
     lines.push("PRINT 1,1");
     lines.push("");
 
