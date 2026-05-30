@@ -5954,38 +5954,39 @@ function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
     const designId = item.designId||"";
     const cat = (item.categoryLabel||"")+" U"+unitNo+"/"+item.unitCount;
 
-    // TSPL for TSC TTP-244 Pro
-    // Label: 100mm wide x 15mm tall (one label per face)
+    // ZPL for TSC TTP-244 Pro (EZD firmware — ZPL is native mode)
+    // Label: 100mm wide x 15mm tall
     // At 203dpi: 1mm = ~8 dots → 100mm = 800 dots wide, 15mm = 120 dots tall
-    // All y coordinates must stay within 0–110 dots
-    const Q = String.fromCharCode(34);
+    // ^XA = start label, ^XZ = end label
+    // ^PW = print width in dots, ^LL = label length in dots
+    // ^FO = field origin (x,y), ^A0N = font (normal,height,width)
+    // ^BC = barcode Code128, ^FD = field data, ^FS = field separator
     const lines = [
-      "SIZE 100 mm, 15 mm",
-      "GAP 3 mm, 0",
-      "DIRECTION 0",
-      "REFERENCE 0,0",
-      "CLS",
-      // Barcode on left — height 70 dots, no human readable (we print it as TEXT below)
-      "BARCODE 4,4,"+Q+"128"+Q+",70,0,0,2,2,"+Q+barcode+Q,
-      // Barcode text below barcode
-      "TEXT 4,78,"+Q+"1"+Q+",0,1,1,"+Q+barcode+Q,
-      // Design ID + purity — middle section
-      "TEXT 220,4,"+Q+"1"+Q+",0,1,1,"+Q+designId+" "+purity+Q,
+      "^XA",
+      "^PW800",           // print width 800 dots = 100mm
+      "^LL120",           // label length 120 dots = 15mm
+      "^MMT",             // media mode tear
+      "^MNY",             // media tracking gap
+      // Barcode left side — x=4, y=4, height=60 dots
+      "^FO4,4^BY2^BCN,60,N,N^FD"+barcode+"^FS",
+      // Barcode text below
+      "^FO4,70^A0N,18,18^FD"+barcode+"^FS",
+      // Design ID + purity — middle
+      "^FO230,4^A0N,20,20^FD"+designId+" "+purity+"^FS",
       // Category + unit
-      "TEXT 220,30,"+Q+"1"+Q+",0,1,1,"+Q+cat+Q,
-      // Weights on one line
-      "TEXT 220,56,"+Q+"1"+Q+",0,1,1,"+Q+"G:"+grossWt+" N:"+netWt+(hasStones?" S:"+stoneWt:"")+Q,
-      // Price — large, right side
-      "TEXT 530,8,"+Q+"3"+Q+",0,1,1,"+Q+price+Q,
-      // Carats if stones
+      "^FO230,28^A0N,20,20^FD"+cat+"^FS",
+      // Weights
+      "^FO230,54^A0N,18,18^FDG:"+grossWt+" N:"+netWt+(hasStones?" S:"+stoneWt:"")+"^FS",
+      // Price — larger font
+      "^FO560,4^A0N,30,25^FD"+price+"^FS",
     ];
 
     if(hasStones) {
-      lines.push("TEXT 530,60,"+Q+"1"+Q+",0,1,1,"+Q+carats+Q);
+      lines.push("^FO560,52^A0N,18,18^FD"+carats+"^FS");
     }
 
-    lines.push("TEXT 530,78,"+Q+"1"+Q+",0,1,1,"+Q+"BRASILGO"+Q);
-    lines.push("PRINT 1,1");
+    lines.push("^FO560,74^A0N,18,18^FDBRASILGO^FS");
+    lines.push("^XZ");
     lines.push("");
 
     return lines.join("\r\n");
