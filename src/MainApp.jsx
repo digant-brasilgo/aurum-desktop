@@ -40,6 +40,40 @@ function getAllPurities(db) {
   return [...getPurities(db,"Gold"), ...getPurities(db,"Silver")];
 }
 
+// Default stone types — stored in db.tagSettings.stoneTypes, editable by Admin/CO in Settings
+const DEFAULT_STONE_TYPES = [
+  "Agate","Alexandrite","Amazonite","Amber","Amethyst","Ametrine","Ammolite",
+  "Andalusite","Apatite","Aquamarine","Aventurine","Azurite","Black Diamond",
+  "Bloodstone","Blue Topaz","Calcite","Canary Diamond","Carnelian","Chalcedony",
+  "Charoite","Chrome Diopside","Chrysoberyl","Chrysocolla","Chrysoprase","Citrine",
+  "Coral","Danburite","Diamond","Diopside","Emerald","Fire Opal","Fluorite",
+  "Garnet","Green Amethyst","Hematite","Howlite","Imperial Topaz","Iolite",
+  "Jade","Jadeite","Jasper","Jet","Kunzite","Kyanite","Labradorite","Lapis Lazuli",
+  "Larimar","Lepidolite","London Blue Topaz","Malachite","Moissanite","Moonstone",
+  "Morganite","Mother of Pearl","Obsidian","Onyx","Opal","Paraiba Tourmaline",
+  "Pearl","Peridot","Pink Sapphire","Prehnite","Pyrite","Quartz","Rhodochrosite",
+  "Rhodolite Garnet","Rhodonite","Rock Crystal","Rose Quartz","Rubellite","Ruby",
+  "Rutile Quartz","Sapphire","Serpentine","Smoky Quartz","Sodalite","Spinel",
+  "Star Ruby","Star Sapphire","Sugilite","Sunstone","Tanzanite","Tiger's Eye",
+  "Topaz","Tourmaline","Tsavorite Garnet","Turquoise","Turquoise Matrix",
+  "Unakite","Variscite","Zircon","Zoisite","Other"
+];
+
+function getStoneTypes(db) {
+  const stored = db?.tagSettings?.stoneTypes;
+  if(stored && Array.isArray(stored) && stored.length > 0) return stored;
+  return DEFAULT_STONE_TYPES;
+}
+
+// Tag currency options — stored in db.tagSettings.tagCurrencies, editable in Settings
+const DEFAULT_TAG_CURRENCIES = ["INR","USD","CAD","AUD","EUR"];
+
+function getTagCurrencies(db) {
+  const stored = db?.tagSettings?.tagCurrencies;
+  if(stored && Array.isArray(stored) && stored.length > 0) return stored;
+  return DEFAULT_TAG_CURRENCIES;
+}
+
 // Pure metal factors — how much pure metal is in 1g of each purity
 const PURITY_FACTORS = {
   "24K":        { factor: 0.9999, metalType: "Gold",   label: "24 Karat Gold"   },
@@ -982,6 +1016,7 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
     { id:"co",        label:"Central Office", icon:"⌂", group:"production" },
     { id:"bags",      label:"Bags",           icon:"⬡", group:"production" },
     { id:"pmbook",    label:"PM Book",        icon:"📒", group:"production" },
+    { id:"printtags", label:"Print Tags",      icon:"🏷", group:"production" },
     { id:"movement",  label:"Movement",       icon:"⇄", group:"production" },
     { id:"groups",    label:"Groups",         icon:"⊞", group:"production" },
     { id:"printsheets", label:"Print Sheets", icon:"⎙", group:"production" },
@@ -1066,6 +1101,8 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
               if (t.id === "settings") return isAdminOrCO;
               // PM Book — visible to all roles
               if (t.id === "pmbook") return true;
+              // Print Tags — visible to all roles
+              if (t.id === "printtags") return true;
               // Print Sheets — visible to all roles
               if (t.id === "printsheets") return true;
               // Restricted stock tabs — admin/co only
@@ -1249,6 +1286,7 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
                 {tabId==="co"        && <CentralOfficeView db={db} updateDB={updateDB} setModal={setModal} user={user} dateRange={globalDateRange} onShowDigest={()=>setShowDigest(true)} />}
                 {tabId==="bags"      && <BagsView db={db} updateDB={updateDB} setModal={setModal} user={user} goToBagMovement={goToBagMovement} initialBagId={navToBagId} onInitialBagConsumed={()=>setNavToBagId("")} />}
                 {tabId==="pmbook"    && <PMBookView db={db} updateDB={updateDB} user={user} />}
+                {tabId==="printtags" && <PrintTagsView db={db} updateDB={updateDB} user={user} highlightBagId={navToBagId} onHighlightConsumed={()=>setNavToBagId("")} />}
                 {tabId==="customers" && <CustomersView db={db} updateDB={updateDB} user={user} />}
                 {tabId==="purestock" && <PureMetalView db={db} updateDB={updateDB} user={user} dateRange={globalDateRange} />}
                 {tabId==="alloyed"   && <AlloyedMetalView db={db} updateDB={updateDB} user={user} dateRange={globalDateRange} />}
@@ -1328,6 +1366,12 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
                 <button className="btn btn-sm btn-gold" style={{ flex:1 }} onClick={()=>{ goToBagMovement(bag.id); setScanResult(null); }}>
                   → Open in Movement
                 </button>
+                {stockItem && (
+                  <button className="btn btn-sm" style={{ flex:1, borderColor:"#c8a850", color:"#c8a850" }}
+                    onClick={()=>{ setNavToBagId(bag.id); openTab("printtags"); setScanResult(null); }}>
+                    🏷 Print Tag
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -5566,7 +5610,7 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
                   <div className="form-group">
                     <div className="label">Stone Type *</div>
                     <select value={stoneForm.stoneType} onChange={e=>setStoneForm({...stoneForm,stoneType:e.target.value})}>
-                      {["Diamond","Ruby","Emerald","Sapphire","Pearl","Tanzanite","Amethyst","Topaz","Opal","Other"].map(t=>(
+                      {getStoneTypes(db).map(t=>(
                         <option key={t}>{t}</option>
                       ))}
                     </select>
@@ -5715,6 +5759,125 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
 }
 
 // ── Ready Stock View Component ───────────────────────────────────────────────
+// ── Print Tags View — accessible to all roles (PM prints tags from here) ──────
+function PrintTagsView({ db, updateDB, user, highlightBagId, onHighlightConsumed }) {
+  const AGENT_URL = "http://192.168.1.7:3739";
+  const [agentStatus, setAgentStatus] = React.useState("idle");
+  const [agentError,  setAgentError]  = React.useState("");
+  const [rsPrintItem, setRsPrintItem] = React.useState(null);
+  const highlightRef = React.useRef(null);
+
+  const allStock = (db.readyStock||[]).slice().reverse();
+  const available = allStock.filter(s => s.units && s.units.some(u => !u.soldAt));
+
+  React.useEffect(() => { checkAgent(); }, []);
+
+  // Auto-open print modal for scanned bag
+  React.useEffect(() => {
+    if(highlightBagId && available.length > 0) {
+      const item = available.find(s => s.bagId === highlightBagId);
+      if(item) {
+        setRsPrintItem(item);
+        if(onHighlightConsumed) onHighlightConsumed();
+      }
+    }
+  }, [highlightBagId]);
+
+  async function checkAgent() {
+    setAgentStatus("checking");
+    setAgentError("");
+    try {
+      const res  = await fetch(AGENT_URL+"/status", { signal: AbortSignal.timeout(3000) });
+      const data = await res.json();
+      if(data.ok) setAgentStatus("ok");
+      else { setAgentStatus("error"); setAgentError("Agent responded but not OK"); }
+    } catch(e) {
+      setAgentStatus("error");
+      setAgentError("Print Agent offline.");
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize:"10px", color:"var(--text-secondary)", letterSpacing:"4px", fontWeight:"bold", textTransform:"uppercase", paddingBottom:"12px", borderBottom:"1px solid var(--dark4)", marginBottom:"20px" }}>🏷 PRINT TAGS — READY STOCK</div>
+
+      {/* Agent status card */}
+      <div style={{ marginBottom:"20px", padding:"14px 18px", borderRadius:"4px",
+        background: agentStatus==="ok" ? "rgba(77,184,138,0.1)" : "rgba(220,80,80,0.08)",
+        border: "1px solid " + (agentStatus==="ok" ? "#4db88a" : "#e06060") }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:"10px" }}>
+          <div>
+            <div style={{ fontSize:"13px", fontWeight:"bold", color: agentStatus==="ok" ? "#4db88a" : "#e06060", marginBottom:"4px" }}>
+              {agentStatus==="checking" && "⏳ Checking Print Agent..."}
+              {agentStatus==="ok"       && "✅ Print Agent Connected — Ready to print"}
+              {agentStatus==="error"    && "❌ Print Agent Offline"}
+              {agentStatus==="idle"     && "⬜ Print Agent status unknown"}
+            </div>
+            {agentStatus==="error" && (
+              <div style={{ fontSize:"12px", color:"var(--gold-dim)", marginTop:"6px", lineHeight:"1.6" }}>
+                Print Agent is not running on the server PC.<br/>
+                Please ask someone at the server PC (192.168.1.7) to restart AUD —<br/>
+                the agent starts automatically when AUD opens.<br/>
+                Then click <strong>↺ Retry</strong> here.
+              </div>
+            )}
+          </div>
+          <button className="btn btn-sm" onClick={checkAgent} style={{ fontSize:"11px" }}>↺ Retry</button>
+        </div>
+      </div>
+
+      {/* Ready Stock list — read only, print tag only */}
+      {available.length === 0 ? (
+        <div style={{ textAlign:"center", color:"var(--text-dim)", fontSize:"12px", padding:"40px", letterSpacing:"1.5px" }}>
+          NO ITEMS IN READY STOCK
+        </div>
+      ) : (
+        <div style={{ display:"flex", flexDirection:"column", gap:"10px" }}>
+          {available.map(item => {
+            const availUnits = (item.units||[]).filter(u=>!u.soldAt).length;
+            const design = (db.designMaster||db.designs||[]).find(d=>d.id===item.designId||d.designId===item.designId);
+            const photo  = item.photo || design?.photo || design?.photos?.[0] || null;
+            return (
+              <div key={item.id} style={{ background:"var(--dark2)", border:"1px solid var(--dark4)", borderRadius:"4px", padding:"12px 16px", display:"flex", alignItems:"center", gap:"16px", flexWrap:"wrap" }}>
+                {/* Thumbnail */}
+                {photo ? (
+                  <img src={photo} alt={item.designId} style={{ width:"48px", height:"48px", objectFit:"cover", borderRadius:"3px", border:"1px solid var(--dark4)", flexShrink:0 }} />
+                ) : (
+                  <div style={{ width:"48px", height:"48px", background:"var(--dark3)", borderRadius:"3px", border:"1px solid var(--dark4)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"18px", flexShrink:0 }}>💎</div>
+                )}
+                <div style={{ flex:1, minWidth:"200px" }}>
+                  <div style={{ display:"flex", gap:"10px", alignItems:"center", marginBottom:"4px" }}>
+                    <span style={{ color:"var(--gold)", fontWeight:"bold", fontFamily:"monospace" }}>{item.bagId}</span>
+                    <span style={{ color:"var(--text-dim)", fontSize:"11px" }}>{item.designId}</span>
+                    <span className="badge badge-gold" style={{ fontSize:"10px" }}>{item.purity} {item.metalType}</span>
+                  </div>
+                  <div style={{ fontSize:"11px", color:"var(--text-secondary)" }}>
+                    Gross: {(item.grossWeight||0).toFixed(3)}g &nbsp;·&nbsp;
+                    Net: {(item.netMetalWeight||0).toFixed(3)}g &nbsp;·&nbsp;
+                    {availUnits} unit{availUnits!==1?"s":""} available
+                  </div>
+                </div>
+                <button
+                  className="btn btn-gold btn-sm"
+                  disabled={agentStatus!=="ok"}
+                  onClick={()=>setRsPrintItem(item)}
+                  style={{ opacity: agentStatus!=="ok" ? 0.4 : 1, fontSize:"12px" }}>
+                  🏷 Print Tag
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Reuse existing ReadyStockTagPrint modal */}
+      {rsPrintItem && (
+        <ReadyStockTagPrint item={rsPrintItem} db={db} updateDB={updateDB} onClose={()=>setRsPrintItem(null)} />
+      )}
+    </div>
+  );
+}
+
 function ReadyStockView({ db, updateDB }) {
   const [rsView, setRsView] = React.useState("available");
   const [rsPrintItem, setRsPrintItem] = React.useState(null);
@@ -5909,7 +6072,7 @@ function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
   const [printerName, setPrinterName] = React.useState("");
   const [availPrinters, setAvailPrinters] = React.useState([]);
 
-  const AGENT_URL = "http://192.168.1.9:3739";
+  const AGENT_URL = "http://192.168.1.7:3739";
   const design = (db.designMaster||db.designs||[]).find(d=>d.id===item.designId||d.designId===item.designId);
   const photo = design?.photo||design?.photos?.[0]||null;
   const hasStones = item.stoneWeightGrams > 0;
@@ -5939,57 +6102,62 @@ function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
       }
     } catch(e) {
       setAgentStatus("error");
-      setAgentError("Cannot reach Print Agent at "+AGENT_URL+". Is it running on PM's PC?");
+      setAgentError("Cannot reach Print Agent. Is it running?");
     }
   }
 
-  function generateTSPL(unitNo) {
-    const barcode = item.bagId+"-U"+unitNo;
-    const price = "Rs."+(item.suggestedPrice||0).toLocaleString("en-IN");
-    const grossWt = (item.grossWeight||0).toFixed(3)+"g";
-    const netWt = (item.netMetalWeight||0).toFixed(3)+"g";
-    const stoneWt = hasStones ? (item.stoneWeightGrams||0).toFixed(3)+"g" : "";
-    const carats = hasStones ? (item.totalStoneCarats||0).toFixed(2)+"ct" : "";
-    const purity = (item.purity||"")+" "+(item.metalType||"");
-    const designId = item.designId||"";
-    const cat = (item.categoryLabel||"")+" U"+unitNo+"/"+item.unitCount;
+  function generatePrintData(unitNo) {
+    const barcode   = item.bagId;                // BGG-R5 (bag number only, no unit suffix)
+    const designId  = item.designId || "";
+    const grossWt = (item.grossWeight||0).toFixed(3)+" gms.";
+    const netWt   = (item.netMetalWeight||0).toFixed(3)+" gms.";
+    const metal   = (item.metalType||"Gold").toLowerCase();
+    const purity  = (item.purity||"").replace(/Silver\s*/i,"").trim(); // "18K", "14K", "925" etc.
 
-    // ZPL for TSC TTP-244 Pro (EZD firmware — ZPL is native mode)
-    // Label: 100mm wide x 15mm tall
-    // At 203dpi: 1mm = ~8 dots → 100mm = 800 dots wide, 15mm = 120 dots tall
-    // ^XA = start label, ^XZ = end label
-    // ^PW = print width in dots, ^LL = label length in dots
-    // ^FO = field origin (x,y), ^A0N = font (normal,height,width)
-    // ^BC = barcode Code128, ^FD = field data, ^FS = field separator
-    const lines = [
-      "^XA",
-      "^PW800",           // print width 800 dots = 100mm
-      "^LL120",           // label length 120 dots = 15mm
-      "^MMT",             // media mode tear
-      "^MNY",             // media tracking gap
-      // Barcode left side — x=4, y=4, height=60 dots
-      "^FO4,4^BY2^BCN,60,N,N^FD"+barcode+"^FS",
-      // Barcode text below
-      "^FO4,70^A0N,18,18^FD"+barcode+"^FS",
-      // Design ID + purity — middle
-      "^FO230,4^A0N,20,20^FD"+designId+" "+purity+"^FS",
-      // Category + unit
-      "^FO230,28^A0N,20,20^FD"+cat+"^FS",
-      // Weights
-      "^FO230,54^A0N,18,18^FDG:"+grossWt+" N:"+netWt+(hasStones?" S:"+stoneWt:"")+"^FS",
-      // Price — larger font
-      "^FO560,4^A0N,30,25^FD"+price+"^FS",
-    ];
+    // Currency prefix for silver price tag — uses selected currency code directly
+    const currency = db?.tagSettings?.tagCurrency || "INR";
+    const priceNum = parseFloat(item.suggestedPrice||0).toFixed(2);
+    const priceStr = currency + " " + priceNum;
 
-    if(hasStones) {
-      lines.push("^FO560,52^A0N,18,18^FD"+carats+"^FS");
+    // Build per-stone-type breakdown from stonesByType (up to 3 types)
+    // stonesByType is stored on ready stock items when bag is moved to stock
+    const stonesByType = item.stonesByType || {};
+    const stoneEntries = Object.entries(stonesByType)
+      .filter(([,s]) => (s.carats||0) > 0 || (s.pieces||0) > 0)
+      .slice(0, 3);
+
+    function stoneLabel(typeName) {
+      // First 4 chars of stone name, title-cased
+      return (typeName||"Ston").substring(0,4);
     }
 
-    lines.push("^FO560,74^A0N,18,18^FDBRASILGO^FS");
-    lines.push("^XZ");
-    lines.push("");
+    // Stone slots 1-3: fill from stonesByType, leave empty if not present
+    const stoneSlots = [0,1,2].map(i => {
+      if(i < stoneEntries.length) {
+        const [typeName, s] = stoneEntries[i];
+        return {
+          name: stoneLabel(typeName),
+          wt:   (Math.max(0, s.carats||0)).toFixed(3),
+        };
+      }
+      return { name:"Ston", wt:"" }; // empty slot — skip line in agent
+    });
 
-    return lines.join("\r\n");
+    return {
+      BarcodeData:  barcode,
+      DesignId:     designId,
+      Metal:        metal,               // "gold" or "silver"
+      Purity:       purity,              // "18K", "14K", "925"
+      GrossWt:      grossWt,
+      NetWt:        netWt,
+      Stone1Name:   stoneSlots[0].name,
+      Stone1Wt:     stoneSlots[0].wt,
+      Stone2Name:   stoneSlots[1].name,
+      Stone2Wt:     stoneSlots[1].wt,
+      Stone3Name:   stoneSlots[2].name,
+      Stone3Wt:     stoneSlots[2].wt,
+      Price:        metal==="silver" ? priceStr : "", // gold has no price on tag
+    };
   }
 
   async function handlePrintTSPL() {
@@ -5998,14 +6166,14 @@ function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
     setPrinting(true);
     try {
       for(const unitNo of selectedUnits) {
-        const tspl = generateTSPL(unitNo);
+        const data = generatePrintData(unitNo);
         const res = await fetch(AGENT_URL+"/print", {
           method:"POST",
           headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ tspl, printer: printerName||undefined }),
+          body: JSON.stringify({ data }),
         });
-        const data = await res.json();
-        if(!data.ok) throw new Error(data.error||"Print failed");
+        const result = await res.json();
+        if(!result.ok) throw new Error(result.error||"Print failed");
       }
       // Mark tags as printed
       updateDB(prev=>{
@@ -6140,6 +6308,8 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId,
   const silverPurities = getPurities(db, "Silver");
   const bagPurities    = form.metalType === "Gold" ? goldPurities : silverPurities;
   const [suggestedBagNo, setSuggestedBagNo] = useState("");
+  const [manualBagOverride, setManualBagOverride] = useState(false);
+  const [manualBagNo, setManualBagNo] = useState("");
 
   useEffect(()=>{
     const { bagNo } = nextBagNo(db.bagCounters, form.metalType, form.categoryCode);
@@ -6170,9 +6340,13 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId,
       if(!proceed) return;
     }
 
-    const { bagNo, key, next } = nextBagNo(db.bagCounters, form.metalType, form.categoryCode);
+    const { bagNo: autoBagNo, key, next } = nextBagNo(db.bagCounters, form.metalType, form.categoryCode);
+    const bagNo = (manualBagOverride && manualBagNo.trim()) ? manualBagNo.trim().toUpperCase() : autoBagNo;
+    if(manualBagOverride && manualBagNo.trim()) {
+      if((db.bags||[]).find(b=>b.id===bagNo)) return alert(`Bag ID "${bagNo}" already exists. Please use a different ID.`);
+    }
     updateDB(prev=>{
-      prev.bagCounters[key] = next;
+      if(!manualBagOverride) prev.bagCounters[key] = next;
       // Update itemCounter
       const bag = {
         id: bagNo, designId: form.designId,
@@ -6263,6 +6437,8 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId,
       return prev;
     });
     setShowCreate(false);
+    setManualBagOverride(false);
+    setManualBagNo("");
     setForm({ metalType:"Gold", purity: getPurities(db,"Gold")[0]||"18K", categoryCode:"R", designId:"", designMasterId:"", unitCount:1, partsPerUnit:1, issuedWeight:"", startDept:"", startKarigarId:"", targetDate:"", orderNo:"", customerId:"", notes:"" });
   };
 
@@ -6463,10 +6639,27 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId,
               </select>
             </div>
             <div className="form-group">
-              <div className="label">Auto Bag Number</div>
-              <div style={{ padding:"8px 12px", background:"var(--dark3)", border:"1px solid var(--gold)", color:"var(--gold-light)", borderRadius:"2px", fontWeight:"bold", letterSpacing:"2px" }}>
-                {suggestedBagNo}
+              <div className="label" style={{ display:"flex", alignItems:"center", gap:"10px" }}>
+                {manualBagOverride ? "Manual Bag Number" : "Auto Bag Number"}
+                {(user?.role==="co"||user?.role==="admin") && (
+                  <label style={{ display:"flex", alignItems:"center", gap:"5px", fontWeight:"normal", fontSize:"11px", color:"var(--gold-dim)", cursor:"pointer" }}>
+                    <input type="checkbox" checked={manualBagOverride} onChange={e=>{ setManualBagOverride(e.target.checked); setManualBagNo(suggestedBagNo); }} style={{ cursor:"pointer" }} />
+                    Manual Override
+                  </label>
+                )}
               </div>
+              {manualBagOverride ? (
+                <input
+                  value={manualBagNo}
+                  onChange={e=>setManualBagNo(e.target.value.toUpperCase())}
+                  placeholder={suggestedBagNo}
+                  style={{ fontWeight:"bold", letterSpacing:"2px", color:"var(--gold-light)", textTransform:"uppercase" }}
+                />
+              ) : (
+                <div style={{ padding:"8px 12px", background:"var(--dark3)", border:"1px solid var(--gold)", color:"var(--gold-light)", borderRadius:"2px", fontWeight:"bold", letterSpacing:"2px" }}>
+                  {suggestedBagNo}
+                </div>
+              )}
             </div>
             {/* ── Design Master picker ── */}
             <div className="form-group">
@@ -11761,7 +11954,7 @@ function StonesView({ db, updateDB }) {
   const emptyStoneRow = { stoneType:"Diamond", pieces:"", carats:"" };
   const [issueForm, setIssueForm] = useState({ karigarId:"", notes:"", stoneRows:[{ stoneType:"Diamond", pieces:"", carats:"" }], returnedUnused:[], returnedBroken:[] });
   const [lossForm, setLossForm] = useState({ dept:"", stoneType:"Diamond", pieces:"", carats:"", lossType:"Lost", notes:"" });
-  const STONE_TYPES = ["Diamond","Ruby","Emerald","Sapphire","Pearl","Topaz","Amethyst","Coral","Other"];
+  const STONE_TYPES = getStoneTypes(db);
 
   const bag = db.bags.find(b=>b.id===selectedBagId);
   const bagStoneRecords = db.stoneLedger ? db.stoneLedger.filter(s=>s.bagId===selectedBagId) : [];
@@ -19353,6 +19546,60 @@ function SettingsView({ db, updateDB, onExport, onWipe, onImport, user, can, ope
               <div style={{ fontSize:"11px" }}>Restart AURUM to start the LAN server, or check console for errors.</div>
             </div>
           )}
+        </div>
+
+        {/* ── Print Tag Settings ── */}
+        <div className="section-title" style={{ marginTop:"8px" }}><span className="section-title-accent"></span>🏷 Print Tag Settings</div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"16px", marginBottom:"20px" }}>
+
+          {/* Currency */}
+          <div style={{ background:"var(--dark3)", padding:"16px", borderRadius:"2px", border:"1px solid var(--dark4)" }}>
+            <div style={{ color:"var(--gold)", fontSize:"12px", marginBottom:"8px", letterSpacing:"1px" }}>PRICE CURRENCY (Silver Tags)</div>
+            <div style={{ fontSize:"11px", color:"var(--gold-dim)", marginBottom:"12px" }}>
+              Currency shown on silver jewellery price tags. Gold tags never show price.
+            </div>
+            <select
+              value={db.tagSettings?.tagCurrency||"INR"}
+              onChange={e=>updateDB(prev=>{ if(!prev.tagSettings) prev.tagSettings={}; prev.tagSettings.tagCurrency=e.target.value; return prev; })}
+              style={{ width:"100%", padding:"7px", background:"var(--dark)", border:"1px solid var(--dark4)", color:"var(--text)", borderRadius:"3px", fontSize:"13px" }}>
+              {getTagCurrencies(db).map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+            <div style={{ fontSize:"11px", color:"var(--gold-dim)", margin:"12px 0 6px" }}>
+              Manage available currencies — one per line:
+            </div>
+            <textarea
+              rows={4}
+              value={(db.tagSettings?.tagCurrencies||DEFAULT_TAG_CURRENCIES).join("\n")}
+              onChange={e=>{
+                const currencies = e.target.value.split("\n").map(s=>s.trim().toUpperCase()).filter(Boolean);
+                updateDB(prev=>{ if(!prev.tagSettings) prev.tagSettings={}; prev.tagSettings.tagCurrencies=currencies; return prev; });
+              }}
+              style={{ width:"100%", background:"var(--dark)", border:"1px solid var(--dark4)", color:"var(--text)", borderRadius:"3px", fontSize:"12px", padding:"8px", boxSizing:"border-box", resize:"vertical", fontFamily:"monospace" }}
+            />
+            <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"6px" }}>
+              Use standard 3-letter currency codes (e.g. INR, USD, GBP, SGD)
+            </div>
+          </div>
+
+          {/* Stone Types */}
+          <div style={{ background:"var(--dark3)", padding:"16px", borderRadius:"2px", border:"1px solid var(--dark4)" }}>
+            <div style={{ color:"var(--gold)", fontSize:"12px", marginBottom:"8px", letterSpacing:"1px" }}>STONE TYPES</div>
+            <div style={{ fontSize:"11px", color:"var(--gold-dim)", marginBottom:"10px" }}>
+              Manage stone types available across Stones menu and tag printing. One per line.
+            </div>
+            <textarea
+              rows={6}
+              value={(db.tagSettings?.stoneTypes||DEFAULT_STONE_TYPES).join("\n")}
+              onChange={e=>{
+                const types = e.target.value.split("\n").map(s=>s.trim()).filter(Boolean);
+                updateDB(prev=>{ if(!prev.tagSettings) prev.tagSettings={}; prev.tagSettings.stoneTypes=types; return prev; });
+              }}
+              style={{ width:"100%", background:"var(--dark)", border:"1px solid var(--dark4)", color:"var(--text)", borderRadius:"3px", fontSize:"12px", padding:"8px", boxSizing:"border-box", resize:"vertical", fontFamily:"monospace" }}
+            />
+            <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"6px" }}>
+              First 4 letters of stone name will appear on tag labels (e.g. "Diamond" → "Diam Wt.")
+            </div>
+          </div>
         </div>
 
         <div className="section-title"><span className="section-title-accent"></span>💾 Data Management</div>

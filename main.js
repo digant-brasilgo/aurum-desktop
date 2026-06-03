@@ -243,6 +243,55 @@ function startLanServer() {
       }
     });
 
+    // Mark a ready stock item as sold — used by Aurum Business billing
+    // Only allows updating: stockSoldAt, stockSoldTo, stockSoldInvoice, stockSoldPrice
+    appExpress.patch('/api/stock-sold/:id', authMiddleware, (req, res) => {
+      try {
+        const data = readData();
+        const item = (data.readyStock || []).find(s => s.id === req.params.id);
+        if (!item) return res.status(404).json({ error: 'Ready stock item not found' });
+        const { unitNo, stockSoldAt, stockSoldTo, stockSoldInvoice, stockSoldPrice } = req.body;
+        // Mark the specific unit as sold
+        if(unitNo !== undefined) {
+          const unit = (item.units || []).find(u => u.unitNo === unitNo);
+          if(unit) {
+            unit.soldAt      = stockSoldAt      || new Date().toISOString();
+            unit.soldTo      = stockSoldTo      || "";
+            unit.soldInvoice = stockSoldInvoice || "";
+            unit.soldPrice   = stockSoldPrice   || 0;
+          }
+        } else {
+          // Mark all units as sold
+          (item.units || []).forEach(u => {
+            if(!u.soldAt) {
+              u.soldAt      = stockSoldAt      || new Date().toISOString();
+              u.soldTo      = stockSoldTo      || "";
+              u.soldInvoice = stockSoldInvoice || "";
+              u.soldPrice   = stockSoldPrice   || 0;
+            }
+          });
+        }
+        writeData(data);
+        lastChange = Date.now();
+        if (mainWindow) mainWindow.webContents.send('db:reload');
+        res.json({ ok: true });
+      } catch(e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
+
+    // Also allow looking up a ready stock item by bagId — used by AUB barcode scan
+    appExpress.get('/api/stock-by-bag/:bagId', authMiddleware, (req, res) => {
+      try {
+        const data = readData();
+        const item = (data.readyStock || []).find(s => s.bagId === req.params.bagId);
+        if (!item) return res.status(404).json({ error: 'Bag not in ready stock' });
+        res.json({ ok: true, item });
+      } catch(e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
+
     appExpress.get('/api/users', authMiddleware, (req, res) => {
       res.json(readUsers().map(u => ({
         id:u.id, username:u.username, displayName:u.displayName,
