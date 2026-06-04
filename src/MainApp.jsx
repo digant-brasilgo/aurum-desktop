@@ -296,7 +296,8 @@ function initDB() {
     financialTxns: [],      // All financial transactions (sales, purchases, payments)
     // ── Casting module ──────────────────────────────────────────────────
     alloyedStock: [],       // Alloyed metal stock (runners, stems, dust) per purity — casting module
-    coAlloyedStock: [],     // CO's alloyed metal ledger — all ins/outs at CO level (bag issues, returns, extra metal, casting, customer delivery)
+    coAlloyedStock: [],     // CO's alloyed metal ledger — all ins/outs at CO level
+    coReadyStock:   [],     // CO's ready stock ledger — credited on transfer in, debited on sale (bag issues, returns, extra metal, casting, customer delivery)
     castingSessions: [],    // Full casting session lifecycle records
     pmBook: [],             // PM's unified metal ledger — tracks everything PM physically holds
     // ── Stone / Gemstone tracking ────────────────────────────────────────────
@@ -1358,7 +1359,9 @@ export function MainApp({ db: rawDb, updateDB, user, can, activeTab, setActiveTa
                 {stockItem && (
                   <div style={{ background:"rgba(184,148,64,0.1)", border:"1px solid var(--gold-dim)", padding:"5px 8px", borderRadius:"3px" }}>
                     <div style={{ color:"var(--text-dim)", fontSize:"10px" }}>PRICE</div>
-                    <div style={{ color:"var(--gold)", fontWeight:"bold" }}>₹{(stockItem.suggestedPrice||0).toLocaleString("en-IN")}</div>
+                    <div style={{ color: stockItem.suggestedPrice ? "var(--gold)" : "var(--text-dim)", fontWeight:"bold", fontSize: stockItem.suggestedPrice ? "inherit" : "10px" }}>
+                      {stockItem.suggestedPrice ? "₹"+(stockItem.suggestedPrice||0).toLocaleString("en-IN") : "To be priced during billing"}
+                    </div>
                   </div>
                 )}
               </div>
@@ -3803,6 +3806,7 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
           { id:"invoice",       label:"🧾 Proforma Invoice" },
           { id:"gemstone",      label:"💎 Gemstone Ledger" },
           { id:"readystock",    label:"🏷 Ready Stock" },
+          { id:"rsledger",      label:"📒 Ready Stock Ledger" },
         ].map(t=>(
           <button key={t.id} className={`btn ${coTab===t.id?"btn-gold":""}`} onClick={()=>setCoTab(t.id)}>{t.label}</button>
         ))}
@@ -5458,11 +5462,12 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
                 {r.receiveType==="normal" && !((db.readyStock||[]).find(s=>s.receiptId===r.id)) && (
                   stockPriceForm?.receiptId===r.id ? (
                     <div style={{ display:"flex", gap:"6px", alignItems:"center" }}>
-                      <span style={{ fontSize:"11px", color:"var(--gold-dim)" }}>₹/unit:</span>
+                      <span style={{ fontSize:"11px", color:"var(--gold-dim)" }}>₹/unit (optional):</span>
                       <input type="number" autoFocus
                         value={stockPriceForm.price}
                         onChange={e=>setStockPriceForm(f=>({...f,price:e.target.value}))}
-                        style={{ width:"90px", fontSize:"12px", padding:"3px 8px", background:"var(--dark)", border:"1px solid var(--gold)", color:"var(--gold)", borderRadius:"3px", textAlign:"right" }}
+                        placeholder="Leave blank to price later"
+                        style={{ width:"120px", fontSize:"12px", padding:"3px 8px", background:"var(--dark)", border:"1px solid var(--gold)", color:"var(--gold)", borderRadius:"3px", textAlign:"right" }}
                         onKeyDown={e=>{ if(e.key==="Escape") setStockPriceForm(null); }}
                       />
                       <button className="btn btn-sm btn-gold" onClick={()=>{
@@ -5496,6 +5501,21 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
                             source:"Ready Stock Transfer — Bag "+r.bagId,
                             date:new Date().toISOString(),
                             notes:"Bag "+r.bagId+" transferred to Ready Stock — "+netWt.toFixed(3)+"g "+r.purity+" "+r.metalType+" out of alloyed register",
+                          });
+                          // Credit coReadyStock — metal enters ready stock register
+                          if(!prev.coReadyStock) prev.coReadyStock=[];
+                          prev.coReadyStock.push({
+                            id:"RSC-"+(Date.now().toString(36)), type:"STOCK_IN", direction:"IN",
+                            metalType:r.metalType, purity:r.purity,
+                            weight:netWt, pureEquiv:pureWt,
+                            bagNo:r.bagId, readyStockId:rsId,
+                            designId:r.designId||"",
+                            categoryLabel:r.categoryLabel||"",
+                            grossWeight:r.grossWeight||0,
+                            suggestedPrice:parseFloat(stockPriceForm.price)||0,
+                            source:"Transfer from Alloyed Stock — Bag "+r.bagId,
+                            date:new Date().toISOString(),
+                            notes:"Bag "+r.bagId+" entered Ready Stock — "+netWt.toFixed(3)+"g "+r.purity+" "+r.metalType,
                           });
                           if(!prev.auditLogs) prev.auditLogs=[];
                           prev.auditLogs.push({ id:"AL-"+(Date.now().toString(36)), action:"MOVED_TO_STOCK", entityId:r.bagId, details:"Bag "+r.bagId+" moved to Ready Stock @ ₹"+stockPriceForm.price+"/unit — "+netWt.toFixed(3)+"g debited from alloyed stock", timestamp:new Date().toISOString() });
@@ -5753,15 +5773,100 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
 
       {/* ── READY STOCK REGISTER ── */}
       {coTab==="readystock" && <ReadyStockView db={db} updateDB={updateDB} />}
+      {coTab==="rsledger"   && <ReadyStockLedgerView db={db} />}
 
     </div>
   );
 }
 
 // ── Ready Stock View Component ───────────────────────────────────────────────
+// ── Ready Stock Ledger View — Admin/CO only ───────────────────────────────
+function ReadyStockLedgerView({ db }) {
+  const entries = [...(db.coReadyStock||[])].sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+  let balance = 0;
+  const withBalance = [...entries].reverse().map(e => {
+    if(e.direction==="IN")  balance += (e.weight||0);
+    if(e.direction==="OUT") balance -= (e.weight||0);
+    return { ...e, balance };
+  }).reverse();
+
+  const totalIn  = entries.filter(e=>e.direction==="IN" ).reduce((s,e)=>s+(e.weight||0),0);
+  const totalOut = entries.filter(e=>e.direction==="OUT").reduce((s,e)=>s+(e.weight||0),0);
+  const netBalance = totalIn - totalOut;
+
+  const typeColor = (type) => {
+    if(type==="STOCK_IN")       return "#4db88a";
+    if(type==="RETAIL_SALE")    return "#e06060";
+    if(type==="SALE_CANCELLED") return "#4db88a";
+    return "var(--text)";
+  };
+
+  return (
+    <div>
+      <div style={{ fontSize:"10px", color:"var(--text-secondary)", letterSpacing:"4px", fontWeight:"bold", textTransform:"uppercase", paddingBottom:"12px", borderBottom:"1px solid var(--dark4)", marginBottom:"20px" }}>
+        📒 READY STOCK LEDGER
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:"12px", marginBottom:"20px" }}>
+        {[
+          { label:"TOTAL IN",    value:totalIn.toFixed(3)+"g",    color:"#4db88a" },
+          { label:"TOTAL OUT",   value:totalOut.toFixed(3)+"g",   color:"#e06060" },
+          { label:"NET BALANCE", value:netBalance.toFixed(3)+"g", color:"var(--gold)" },
+        ].map(c=>(
+          <div key={c.label} style={{ background:"var(--dark2)", border:"1px solid var(--dark4)", borderRadius:"4px", padding:"12px 16px" }}>
+            <div style={{ fontSize:"10px", color:"var(--text-dim)", letterSpacing:"1px", marginBottom:"4px" }}>{c.label}</div>
+            <div style={{ fontSize:"20px", fontWeight:"bold", color:c.color }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+      {entries.length === 0 ? (
+        <div style={{ textAlign:"center", color:"var(--text-dim)", fontSize:"12px", padding:"40px", letterSpacing:"1.5px" }}>NO READY STOCK LEDGER ENTRIES YET</div>
+      ) : (
+        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:"12px" }}>
+          <thead>
+            <tr style={{ borderBottom:"2px solid var(--dark4)" }}>
+              {["Date","Bag No","Design","Type","Dir","Metal","Weight (g)","Balance (g)","Invoice / Notes"].map(h=>(
+                <th key={h} style={{ padding:"8px 10px", textAlign:"left", color:"var(--gold-dim)", fontSize:"10px", letterSpacing:"1px", fontWeight:"600" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {withBalance.map((e,i)=>(
+              <tr key={e.id||i} style={{ borderBottom:"1px solid var(--dark4)", background:i%2===0?"transparent":"rgba(255,255,255,0.01)" }}>
+                <td style={{ padding:"7px 10px", color:"var(--text-dim)", whiteSpace:"nowrap" }}>{e.date?new Date(e.date).toLocaleDateString("en-IN"):"—"}</td>
+                <td style={{ padding:"7px 10px", color:"var(--gold)", fontFamily:"monospace", fontWeight:"bold" }}>{e.bagNo||"—"}</td>
+                <td style={{ padding:"7px 10px", color:"var(--text-dim)", fontSize:"11px" }}>{e.designId||"—"}</td>
+                <td style={{ padding:"7px 10px" }}>
+                  <span style={{ fontSize:"10px", padding:"2px 6px", borderRadius:"3px", background:"rgba(255,255,255,0.05)", color:typeColor(e.type), border:"1px solid "+typeColor(e.type)+"44" }}>{e.type||"—"}</span>
+                </td>
+                <td style={{ padding:"7px 10px", fontWeight:"bold", color:e.direction==="IN"?"#4db88a":"#e06060" }}>{e.direction}</td>
+                <td style={{ padding:"7px 10px", color:"var(--text-dim)", fontSize:"11px" }}>{e.purity} {e.metalType}</td>
+                <td style={{ padding:"7px 10px", fontFamily:"monospace", color:e.direction==="IN"?"#4db88a":"#e06060", fontWeight:"bold" }}>
+                  {e.direction==="IN"?"+":"-"}{(e.weight||0).toFixed(3)}
+                </td>
+                <td style={{ padding:"7px 10px", fontFamily:"monospace", color:"var(--gold)", fontWeight:"bold" }}>{(e.balance||0).toFixed(3)}</td>
+                <td style={{ padding:"7px 10px", color:"var(--text-dim)", fontSize:"11px", maxWidth:"200px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {e.invoiceNo&&<span style={{ color:"var(--gold)", marginRight:"6px" }}>{e.invoiceNo}</span>}
+                  {e.soldTo&&<span style={{ marginRight:"6px" }}>→ {e.soldTo}</span>}
+                  {e.notes||""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 // ── Print Tags View — accessible to all roles (PM prints tags from here) ──────
 function PrintTagsView({ db, updateDB, user, highlightBagId, onHighlightConsumed }) {
-  const AGENT_URL = "http://192.168.1.7:3739";
+  // Use AUD's own API as proxy — works from any LAN browser without CORS issues
+  const AUD_URL = window.location.hostname === "localhost"
+    ? "http://localhost:3737"
+    : "http://192.168.1.7:3737";
+  const AGENT_PROXY_STATUS = AUD_URL + "/api/agent-status";
+  const AGENT_PROXY_PRINT  = AUD_URL + "/api/agent-print";
   const [agentStatus, setAgentStatus] = React.useState("idle");
   const [agentError,  setAgentError]  = React.useState("");
   const [rsPrintItem, setRsPrintItem] = React.useState(null);
@@ -5787,13 +5892,17 @@ function PrintTagsView({ db, updateDB, user, highlightBagId, onHighlightConsumed
     setAgentStatus("checking");
     setAgentError("");
     try {
-      const res  = await fetch(AGENT_URL+"/status", { signal: AbortSignal.timeout(3000) });
+      const token = sessionStorage.getItem("aurum_token")||"";
+      const res  = await fetch(AGENT_PROXY_STATUS, {
+        headers:{ "Authorization":"Bearer "+token },
+        signal: AbortSignal.timeout(4000)
+      });
       const data = await res.json();
-      if(data.ok) setAgentStatus("ok");
-      else { setAgentStatus("error"); setAgentError("Agent responded but not OK"); }
+      if(data.running) setAgentStatus("ok");
+      else { setAgentStatus("error"); setAgentError("Agent not running on server PC."); }
     } catch(e) {
       setAgentStatus("error");
-      setAgentError("Print Agent offline.");
+      setAgentError("Could not reach AUD server.");
     }
   }
 
@@ -5815,9 +5924,8 @@ function PrintTagsView({ db, updateDB, user, highlightBagId, onHighlightConsumed
             </div>
             {agentStatus==="error" && (
               <div style={{ fontSize:"12px", color:"var(--gold-dim)", marginTop:"6px", lineHeight:"1.6" }}>
-                Print Agent is not running on the server PC.<br/>
-                Please ask someone at the server PC (192.168.1.7) to restart AUD —<br/>
-                the agent starts automatically when AUD opens.<br/>
+                Print Agent is not running on the server PC (192.168.1.7).<br/>
+                Please restart AUD on the server PC — the agent starts automatically with AUD.<br/>
                 Then click <strong>↺ Retry</strong> here.
               </div>
             )}
@@ -5850,6 +5958,7 @@ function PrintTagsView({ db, updateDB, user, highlightBagId, onHighlightConsumed
                     <span style={{ color:"var(--gold)", fontWeight:"bold", fontFamily:"monospace" }}>{item.bagId}</span>
                     <span style={{ color:"var(--text-dim)", fontSize:"11px" }}>{item.designId}</span>
                     <span className="badge badge-gold" style={{ fontSize:"10px" }}>{item.purity} {item.metalType}</span>
+                    {!item.suggestedPrice && <span style={{ fontSize:"10px", color:"var(--warning)", background:"rgba(224,144,64,0.1)", border:"1px solid var(--warning)", borderRadius:"3px", padding:"1px 6px" }}>Price TBD</span>}
                   </div>
                   <div style={{ fontSize:"11px", color:"var(--text-secondary)" }}>
                     Gross: {(item.grossWeight||0).toFixed(3)}g &nbsp;·&nbsp;
@@ -5973,8 +6082,10 @@ function ReadyStockView({ db, updateDB }) {
               </div>
             ) : (
               <div style={{ marginBottom:"6px" }}>
-                <div style={{ fontSize:"18px", fontWeight:"bold", color:"var(--gold)" }}>₹{(item.suggestedPrice||0).toLocaleString("en-IN")}</div>
-                <div style={{ fontSize:"10px", color:"var(--text-dim)" }}>per unit</div>
+                <div style={{ fontSize:"18px", fontWeight:"bold", color: item.suggestedPrice ? "var(--gold)" : "var(--text-dim)", fontSize: item.suggestedPrice ? "18px" : "11px" }}>
+                  {item.suggestedPrice ? "₹"+(item.suggestedPrice||0).toLocaleString("en-IN") : "To be priced during billing"}
+                </div>
+                {item.suggestedPrice ? <div style={{ fontSize:"10px", color:"var(--text-dim)" }}>per unit</div> : null}
               </div>
             )}
             <div style={{ display:"flex", gap:"6px", justifyContent:"flex-end", flexWrap:"wrap" }}>
@@ -6072,7 +6183,8 @@ function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
   const [printerName, setPrinterName] = React.useState("");
   const [availPrinters, setAvailPrinters] = React.useState([]);
 
-  const AGENT_URL = "http://192.168.1.7:3739";
+  const AUD_URL   = window.location.hostname==="localhost" ? "http://localhost:3737" : "http://192.168.1.7:3737";
+  const AGENT_URL = AUD_URL; // all agent calls go through AUD proxy
   const design = (db.designMaster||db.designs||[]).find(d=>d.id===item.designId||d.designId===item.designId);
   const photo = design?.photo||design?.photos?.[0]||null;
   const hasStones = item.stoneWeightGrams > 0;
@@ -6086,23 +6198,20 @@ function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
     setAgentStatus("checking");
     setAgentError("");
     try {
-      const res = await fetch(AGENT_URL+"/status", { signal: AbortSignal.timeout(3000) });
+      const token = sessionStorage.getItem("aurum_token")||"";
+      const res = await fetch(AUD_URL+"/api/agent-status", { headers:{"Authorization":"Bearer "+token}, signal: AbortSignal.timeout(3000) });
       const data = await res.json();
-      if(data.ok) {
+      if(data.running) {
         setAgentStatus("ok");
-        // Fetch printer list
-        try {
-          const pr = await fetch(AGENT_URL+"/printers");
-          const pd = await pr.json();
-          if(pd.printers) setAvailPrinters(pd.printers);
-        } catch(e) {}
+        // Printers are fixed — TSC TTP-244 Pro
+        setAvailPrinters(["TSC TTP-244 Pro"]);
       } else {
         setAgentStatus("error");
-        setAgentError("Agent responded but not OK");
+        setAgentError("Print Agent not running on server PC. Restart AUD.");
       }
     } catch(e) {
       setAgentStatus("error");
-      setAgentError("Cannot reach Print Agent. Is it running?");
+      setAgentError("Cannot reach AUD server. Check network connection.");
     }
   }
 
@@ -6156,7 +6265,7 @@ function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
       Stone2Wt:     stoneSlots[1].wt,
       Stone3Name:   stoneSlots[2].name,
       Stone3Wt:     stoneSlots[2].wt,
-      Price:        metal==="silver" ? priceStr : "", // gold has no price on tag
+      Price:        metal==="silver" ? (item.suggestedPrice ? priceStr : "") : "", // gold has no price on tag
     };
   }
 
@@ -6167,9 +6276,10 @@ function ReadyStockTagPrint({ item, db, updateDB, onClose }) {
     try {
       for(const unitNo of selectedUnits) {
         const data = generatePrintData(unitNo);
-        const res = await fetch(AGENT_URL+"/print", {
+        const token = sessionStorage.getItem("aurum_token")||"";
+        const res = await fetch(AUD_URL+"/api/agent-print", {
           method:"POST",
-          headers:{"Content-Type":"application/json"},
+          headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
           body: JSON.stringify({ data }),
         });
         const result = await res.json();

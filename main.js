@@ -3,6 +3,37 @@ const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
 
+// ── Print Agent auto-start ─────────────────────────────────────
+let printAgentProcess = null;
+const PRINT_AGENT_PATH = 'D:\\Aurum\\aurum-print\\aurum-print-agent.js';
+
+function startPrintAgent() {
+  if (!fs.existsSync(PRINT_AGENT_PATH)) {
+    console.log('[PrintAgent] Not found at', PRINT_AGENT_PATH, '— skipping');
+    return;
+  }
+  try {
+    const { spawn } = require('child_process');
+    printAgentProcess = spawn('node', [PRINT_AGENT_PATH], {
+      cwd: path.dirname(PRINT_AGENT_PATH),
+      detached: false,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    printAgentProcess.on('error', (e) => { console.log('[PrintAgent] Error:', e.message); printAgentProcess = null; });
+    printAgentProcess.on('exit', (code) => { console.log('[PrintAgent] Exited:', code); printAgentProcess = null; });
+    console.log('[PrintAgent] Started PID:', printAgentProcess.pid);
+  } catch(e) { console.log('[PrintAgent] Failed to start:', e.message); }
+}
+
+function stopPrintAgent() {
+  if (printAgentProcess) {
+    try { process.kill(printAgentProcess.pid, 'SIGTERM'); } catch(e) {}
+    printAgentProcess = null;
+    console.log('[PrintAgent] Stopped');
+  }
+}
+
 // Performance: prevent background throttling
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
@@ -244,33 +275,65 @@ function startLanServer() {
     });
 
     // Mark a ready stock item as sold — used by Aurum Business billing
-    // Only allows updating: stockSoldAt, stockSoldTo, stockSoldInvoice, stockSoldPrice
     appExpress.patch('/api/stock-sold/:id', authMiddleware, (req, res) => {
       try {
         const data = readData();
         const item = (data.readyStock || []).find(s => s.id === req.params.id);
         if (!item) return res.status(404).json({ error: 'Ready stock item not found' });
         const { unitNo, stockSoldAt, stockSoldTo, stockSoldInvoice, stockSoldPrice } = req.body;
-        // Mark the specific unit as sold
+        const soldAt = stockSoldAt || new Date().toISOString();
+        const purityFactors = {"24K":1,"22K":0.9167,"18K":0.75,"14K":0.5833,"925":0.925,"Silver 925":0.925,"9K":0.375};
+        const netWt = item.netMetalWeight || 0;
+
+        // Mark units as sold
         if(unitNo !== undefined) {
           const unit = (item.units || []).find(u => u.unitNo === unitNo);
-          if(unit) {
-            unit.soldAt      = stockSoldAt      || new Date().toISOString();
-            unit.soldTo      = stockSoldTo      || "";
-            unit.soldInvoice = stockSoldInvoice || "";
-            unit.soldPrice   = stockSoldPrice   || 0;
-          }
+          if(unit) { unit.soldAt=soldAt; unit.soldTo=stockSoldTo||""; unit.soldInvoice=stockSoldInvoice||""; unit.soldPrice=stockSoldPrice||0; }
         } else {
-          // Mark all units as sold
           (item.units || []).forEach(u => {
-            if(!u.soldAt) {
-              u.soldAt      = stockSoldAt      || new Date().toISOString();
-              u.soldTo      = stockSoldTo      || "";
-              u.soldInvoice = stockSoldInvoice || "";
-              u.soldPrice   = stockSoldPrice   || 0;
+            if(!u.soldAt) { u.soldAt=soldAt; u.soldTo=stockSoldTo||""; u.soldInvoice=stockSoldInvoice||""; u.soldPrice=stockSoldPrice||0; }
+          });
+        }
+
+        // Debit coReadyStock — metal leaves ready stock on sale
+        if(netWt > 0) {
+          if(!data.coReadyStock) data.coReadyStock = [];
+          data.coReadyStock.push({
+            id: 'RSD-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+            type: "RETAIL_SALE", direction: "OUT",
+            metalType: item.metalType, purity: item.purity,
+            weight: netWt, pureEquiv: netWt * (purityFactors[item.purity]||1),
+            bagNo: item.bagId, readyStockId: item.id,
+            invoiceNo: stockSoldInvoice||"", soldTo: stockSoldTo||"",
+            source: `Retail Sale — Bag ${item.bagId} — Invoice ${stockSoldInvoice||""}`,
+            date: soldAt,
+            notes: `${netWt.toFixed(3)}g ${item.purity} ${item.metalType} sold from ready stock to ${stockSoldTo||"customer"}`,
+          });
+        }
+
+        // Debit coStoneStock — stones leave CO permanently with sold jewellery
+        const stonesByType = item.stonesByType || {};
+        if(Object.keys(stonesByType).length > 0) {
+          if(!data.coStoneStock) data.coStoneStock = [];
+          Object.entries(stonesByType).forEach(([stoneType, s]) => {
+            const netCt  = parseFloat(s.carats||0);
+            const netPcs = Math.max(0, parseInt(s.pieces||0));
+            if(netCt > 0 || netPcs > 0) {
+              data.coStoneStock.push({
+                id: 'SS-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+                type: "RETAIL_SALE", direction: "OUT",
+                stoneType, pieces: netPcs, carats: netCt, grams: netCt * 0.2,
+                bagId: item.bagId,
+                invoiceNo: stockSoldInvoice || "",
+                soldTo: stockSoldTo || "",
+                source: `Retail Sale — Bag ${item.bagId} — Invoice ${stockSoldInvoice||""}`,
+                date: soldAt,
+                notes: `${stoneType} ${netPcs}pcs / ${netCt}ct sold with bag ${item.bagId} to ${stockSoldTo||"customer"}`,
+              });
             }
           });
         }
+
         writeData(data);
         lastChange = Date.now();
         if (mainWindow) mainWindow.webContents.send('db:reload');
@@ -280,13 +343,217 @@ function startLanServer() {
       }
     });
 
-    // Also allow looking up a ready stock item by bagId — used by AUB barcode scan
+    // Mark a ready stock item as unsold — used when AUB invoice is cancelled
+    appExpress.patch('/api/stock-unsold/:id', authMiddleware, (req, res) => {
+      try {
+        const data = readData();
+        const item = (data.readyStock || []).find(s => s.id === req.params.id);
+        if (!item) return res.status(404).json({ error: 'Ready stock item not found' });
+
+        // Clear sold status on all units
+        (item.units || []).forEach(u => {
+          u.soldAt = null; u.soldTo = null; u.soldInvoice = null; u.soldPrice = null;
+        });
+
+        // Credit coReadyStock back — sale cancelled, metal returns to ready stock
+        const purityFactors = {"24K":1,"22K":0.9167,"18K":0.75,"14K":0.5833,"925":0.925,"Silver 925":0.925,"9K":0.375};
+        const netWt = item.netMetalWeight || 0;
+        if(netWt > 0) {
+          if(!data.coReadyStock) data.coReadyStock = [];
+          data.coReadyStock.push({
+            id: 'RSC-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+            type: "SALE_CANCELLED", direction: "IN",
+            metalType: item.metalType, purity: item.purity,
+            weight: netWt, pureEquiv: netWt * (purityFactors[item.purity]||1),
+            bagNo: item.bagId, readyStockId: item.id,
+            source: `Sale Cancelled — Bag ${item.bagId} returned to Ready Stock`,
+            date: new Date().toISOString(),
+            notes: `${netWt.toFixed(3)}g ${item.purity} ${item.metalType} returned to ready stock — sale cancelled`,
+          });
+        }
+
+        // Reverse coStoneStock — credit stones back to CO stock
+        const stonesByType = item.stonesByType || {};
+        if(Object.keys(stonesByType).length > 0) {
+          if(!data.coStoneStock) data.coStoneStock = [];
+          Object.entries(stonesByType).forEach(([stoneType, s]) => {
+            const netCt  = parseFloat(s.carats||0);
+            const netPcs = Math.max(0, parseInt(s.pieces||0));
+            if(netCt > 0 || netPcs > 0) {
+              data.coStoneStock.push({
+                id: 'SU-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+                type: "SALE_CANCELLED", direction: "IN",
+                stoneType, pieces: netPcs, carats: netCt, grams: netCt * 0.2,
+                bagId: item.bagId,
+                source: `Sale Cancelled — Bag ${item.bagId} returned to Ready Stock`,
+                date: new Date().toISOString(),
+                notes: `${stoneType} ${netPcs}pcs / ${netCt}ct returned to CO stock — sale cancelled`,
+              });
+            }
+          });
+        }
+
+        writeData(data);
+        lastChange = Date.now();
+        if (mainWindow) mainWindow.webContents.send('db:reload');
+        res.json({ ok: true });
+      } catch(e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
+
+    // Proxy agent status check — so LAN browsers don't hit agent directly (CORS)
+    appExpress.get('/api/agent-status', (req, res) => {
+      const http = require('http');
+      let responded = false;
+      const options = { hostname:'localhost', port:3739, path:'/status', method:'GET', timeout:2000 };
+      const probe = http.request(options, (r) => {
+        if(!responded) { responded = true; res.json({ ok: true, running: true }); }
+      });
+      probe.on('error', () => { if(!responded) { responded = true; res.json({ ok: true, running: false }); } });
+      probe.on('timeout', () => { probe.destroy(); if(!responded) { responded = true; res.json({ ok: true, running: false }); } });
+      probe.end();
+    });
+
+    // Proxy print job — so LAN browsers send print via AUD server (CORS)
+    appExpress.post('/api/agent-print', (req, res) => {
+      const http = require('http');
+      const body = JSON.stringify(req.body);
+      const options = { hostname:'localhost', port:3739, path:'/print', method:'POST',
+        headers:{ 'Content-Type':'application/json', 'Content-Length':Buffer.byteLength(body) }, timeout:20000 };
+      const probe = http.request(options, (r) => {
+        let data = '';
+        r.on('data', chunk => data += chunk);
+        r.on('end', () => { try { res.json(JSON.parse(data)); } catch(e) { res.json({ ok: true }); } });
+      });
+      probe.on('error', (e) => res.status(500).json({ ok: false, error: e.message }));
+      probe.write(body);
+      probe.end();
+    });
     appExpress.get('/api/stock-by-bag/:bagId', authMiddleware, (req, res) => {
       try {
         const data = readData();
         const item = (data.readyStock || []).find(s => s.bagId === req.params.bagId);
         if (!item) return res.status(404).json({ error: 'Bag not in ready stock' });
         res.json({ ok: true, item });
+      } catch(e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
+
+    // Record sale from receipt history — debits coAlloyedStock and coStoneStock
+    appExpress.patch('/api/receipt-sale/:id', authMiddleware, (req, res) => {
+      try {
+        const data = readData();
+        const receipt = (data.coReceipts || []).find(r => r.id === req.params.id);
+        if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
+        const { invoiceNo, soldTo, soldAt } = req.body;
+        const date = soldAt || new Date().toISOString();
+        const purityFactors = {"24K":1,"22K":0.9167,"18K":0.75,"14K":0.5833,"925":0.925,"Silver 925":0.925,"9K":0.375};
+
+        // Debit coAlloyedStock
+        const netWt = receipt.netMetalWeight || 0;
+        const pureWt = netWt * (purityFactors[receipt.purity] || 1);
+        if(netWt > 0) {
+          if(!data.coAlloyedStock) data.coAlloyedStock = [];
+          data.coAlloyedStock.push({
+            id: 'RS-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+            type: "RETAIL_SALE", direction: "OUT",
+            metalType: receipt.metalType, purity: receipt.purity,
+            weight: netWt, pureEquiv: pureWt, bagNo: receipt.bagId,
+            invoiceNo: invoiceNo||"", soldTo: soldTo||"",
+            source: `Retail Sale — Bag ${receipt.bagId} — Invoice ${invoiceNo||""}`,
+            date, notes: `${netWt.toFixed(3)}g ${receipt.purity} ${receipt.metalType} sold — Invoice ${invoiceNo||""}`,
+          });
+        }
+
+        // Debit coStoneStock
+        const stonesByType = receipt.stonesByType || {};
+        if(Object.keys(stonesByType).length > 0) {
+          if(!data.coStoneStock) data.coStoneStock = [];
+          Object.entries(stonesByType).forEach(([stoneType, s]) => {
+            const netCt = parseFloat(s.carats||0);
+            const netPcs = Math.max(0, parseInt(s.pieces||0));
+            if(netCt > 0 || netPcs > 0) {
+              data.coStoneStock.push({
+                id: 'RS-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+                type: "RETAIL_SALE", direction: "OUT",
+                stoneType, pieces: netPcs, carats: netCt, grams: netCt*0.2,
+                bagId: receipt.bagId, invoiceNo: invoiceNo||"", soldTo: soldTo||"",
+                source: `Retail Sale — Bag ${receipt.bagId} — Invoice ${invoiceNo||""}`,
+                date, notes: `${stoneType} ${netPcs}pcs/${netCt}ct sold with bag ${receipt.bagId}`,
+              });
+            }
+          });
+        }
+
+        // Mark receipt as billed
+        receipt.billedInBusiness = true;
+        receipt.bizInvoiceNo = invoiceNo||"";
+        receipt.bizInvoiceDate = date;
+
+        writeData(data);
+        lastChange = Date.now();
+        if (mainWindow) mainWindow.webContents.send('db:reload');
+        res.json({ ok: true });
+      } catch(e) {
+        res.status(500).json({ error: e.message });
+      }
+    });
+
+    // Reverse a receipt history sale on invoice cancellation
+    appExpress.patch('/api/receipt-sale-cancel/:id', authMiddleware, (req, res) => {
+      try {
+        const data = readData();
+        const receipt = (data.coReceipts || []).find(r => r.id === req.params.id);
+        if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
+        const purityFactors = {"24K":1,"22K":0.9167,"18K":0.75,"14K":0.5833,"925":0.925,"Silver 925":0.925,"9K":0.375};
+        const date = new Date().toISOString();
+
+        // Credit coAlloyedStock back
+        const netWt = receipt.netMetalWeight || 0;
+        const pureWt = netWt * (purityFactors[receipt.purity] || 1);
+        if(netWt > 0) {
+          if(!data.coAlloyedStock) data.coAlloyedStock = [];
+          data.coAlloyedStock.push({
+            id: 'SC-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+            type: "SALE_CANCELLED", direction: "IN",
+            metalType: receipt.metalType, purity: receipt.purity,
+            weight: netWt, pureEquiv: pureWt, bagNo: receipt.bagId,
+            source: `Sale Cancelled — Bag ${receipt.bagId}`,
+            date, notes: `${netWt.toFixed(3)}g returned to CO alloyed stock — sale cancelled`,
+          });
+        }
+
+        // Credit coStoneStock back
+        const stonesByType = receipt.stonesByType || {};
+        if(Object.keys(stonesByType).length > 0) {
+          if(!data.coStoneStock) data.coStoneStock = [];
+          Object.entries(stonesByType).forEach(([stoneType, s]) => {
+            const netCt = parseFloat(s.carats||0);
+            const netPcs = Math.max(0, parseInt(s.pieces||0));
+            if(netCt > 0 || netPcs > 0) {
+              data.coStoneStock.push({
+                id: 'SC-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+                type: "SALE_CANCELLED", direction: "IN",
+                stoneType, pieces: netPcs, carats: netCt, grams: netCt*0.2,
+                bagId: receipt.bagId,
+                source: `Sale Cancelled — Bag ${receipt.bagId}`,
+                date, notes: `${stoneType} ${netPcs}pcs/${netCt}ct returned to CO stone stock — sale cancelled`,
+              });
+            }
+          });
+        }
+
+        // Unmark receipt as billed
+        receipt.billedInBusiness = false;
+        receipt.bizInvoiceNo = "";
+        receipt.bizInvoiceDate = "";
+
+        writeData(data);
+        lastChange = Date.now();
+        if (mainWindow) mainWindow.webContents.send('db:reload');
+        res.json({ ok: true });
       } catch(e) {
         res.status(500).json({ error: e.message });
       }
@@ -1240,6 +1507,7 @@ app.whenReady().then(() => {
   ensureAdmin();
   scheduleBackup();
   startLanServer(); // Start embedded LAN server
+  startPrintAgent(); // Auto-start print agent
 
   // Allow all network requests (needed for live gold/silver prices)
   const { session } = require('electron');
@@ -1313,6 +1581,7 @@ app.on('window-all-closed', () => {}); // Stay in tray
 app.on('activate', () => mainWindow.show());
 app.on('before-quit', () => {
   app.isQuitting = true;
+  stopPrintAgent(); // Stop print agent when AUD closes
   // Backup on every close — catches days when PC is off at 10pm
   try { doBackup(); } catch(e) { console.error('Close-time backup failed:', e); }
 });
