@@ -2843,6 +2843,7 @@ function PMBookView({ db, updateDB, user }) {
     BAG_RECEIVED_FROM_CO: { label:"Bag Received from CO",    color:"#4db88a", icon:"⬇" },
     COMPLETED_BAG:        { label:"Completed Bag (QC Pass)", color:"#4db88a", icon:"✓" },
     LOOSE_RETURN:         { label:"Loose Metal Return",       color:"#7090c0", icon:"↩" },
+    EXTRA_METAL_RECOVERED:{ label:"Extra Metal Received",     color:"#7090c0", icon:"↩" },
     RECALL:               { label:"Partial Recall",           color:"#e0903a", icon:"↺" },
     REVERSAL_CREDIT:      { label:"Reversal Credit",          color:"#b07fd4", icon:"↶" },
     DEPT_ISSUE:           { label:"Issued to Dept",           color:"#e0903a", icon:"↑" },
@@ -3803,7 +3804,6 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
           { id:"recv_metal",    label:"↩ Receive Metal" },
           { id:"account",       label:"▣ Metal Account" },
           { id:"history",       label:"⎘ Receipt History" },
-          { id:"invoice",       label:"🧾 Proforma Invoice" },
           { id:"gemstone",      label:"💎 Gemstone Ledger" },
           { id:"readystock",    label:"🏷 Ready Stock" },
           { id:"rsledger",      label:"📒 Ready Stock Ledger" },
@@ -9372,14 +9372,17 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
 
   // Metal loss calculation:
   // Any dept with stones: recv is GROSS (metal + stones).
-  // metalLoss = metalIssued - (grossReceived - stoneWeight) - recovery
-  // No stones: metalLoss = issued - received - recovery (simple)
-  const calcMetalLoss = (recv, recovery) => {
+  // metalLoss = metalIssued - (grossReceived - stoneWeight) - recovery - looseMetal
+  // No stones: metalLoss = issued - received - recovery - looseMetal (simple)
+  // "Extra Metal Received" and "Loose Metal Returned by Karigar" both represent metal
+  // physically recovered/returned by the karigar — both reduce the calculated loss.
+  const calcMetalLoss = (recv, recovery, looseMetal=0) => {
+    const totalRecovered = (parseFloat(recovery)||0) + (parseFloat(looseMetal)||0);
     if(hasStones && stoneWeightGrams > 0) {
       const netMetalReceived = round3((parseFloat(recv)||0) - stoneWeightGrams);
-      return round3(Math.max(0, currentIssuedWeight - netMetalReceived - (parseFloat(recovery)||0)));
+      return round3(Math.max(0, currentIssuedWeight - netMetalReceived - totalRecovered));
     }
-    return round3(Math.max(0, currentIssuedWeight - (parseFloat(recv)||0) - (parseFloat(recovery)||0)));
+    return round3(Math.max(0, currentIssuedWeight - (parseFloat(recv)||0) - totalRecovered));
   };
 
   const handleQCPass = () => {
@@ -9533,7 +9536,8 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
     // Capture dept BEFORE updateDB fires so triggerStoneSettle sees correct dept
     const deptWasBeforeRecv = (entity==="bag" && bag) ? bag.currentDept : null;
     const recovery = parseFloat(recvForm.recoveryWeight)||0;
-    const metalLoss = calcMetalLoss(recv, recovery);
+    const looseMetalForLoss = parseFloat(recvForm.looseMetalWeight)||0;
+    const metalLoss = calcMetalLoss(recv, recovery, looseMetalForLoss);
 
     // Block: received weight cannot exceed what was physically issued
     // Setting dept:      recv = gross (metal + stones). Max = metalIssued + stoneWeightGrams.
@@ -9765,6 +9769,22 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
           date:now(),
           notes:`Bag ${selectedBagId} received back from ${bag?.currentDept||"dept"} — net metal ${fmtW(netRecv)}${metalLoss>0?" (loss: "+fmtW(metalLoss)+")":""}`,
         });
+      }
+
+      // Extra metal received from karigar alongside the bag — permanently out of the job,
+      // credited to PM Book (same treatment as Loose Metal Returned, below)
+      if(recovery > 0 && entity==="bag") {
+        const bagObj = prev.bags.find(x=>x.id===selectedBagId);
+        if(!prev.pmBook) prev.pmBook=[];
+        prev.pmBook.push({
+          id:generateId(), type:"EXTRA_METAL_RECOVERED", direction:"IN",
+          bagNo:selectedBagId, purity:bagObj?.purity||bag?.purity, metalType:bagObj?.metalType||bag?.metalType,
+          weight:recovery, pureEquiv:toPureMetal(recovery, bagObj?.purity||bag?.purity||"18K"),
+          date:now(),
+          notes:`Extra metal received from karigar — bag ${selectedBagId} — ${fmtW(recovery)} returned alongside the piece`,
+          status:"Ready for CO",
+        });
+        prev.auditLogs.push({ id:generateId(), action:"EXTRA_METAL_RECEIVED", entityId:selectedBagId, details:`Extra metal received: ${fmtW(recovery)} ${bagObj?.purity} returned by karigar — credited to PM Book`, timestamp:now() });
       }
 
       // Loose metal returned by karigar mid-process — permanently out of bag, credited to PM Book
@@ -10778,13 +10798,16 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
                   <div className="form-group">
                     <div className="label">Extra Metal Received (if any) (g)</div>
                     <input type="number" step="0.001" placeholder="0.000" value={recvForm.recoveryWeight} onChange={e=>setRecvForm({...recvForm,recoveryWeight:e.target.value})} />
+                    <div style={{ fontSize:"10px", color:"var(--text-secondary)", marginTop:"4px", lineHeight:"1.6" }}>
+                      Extra metal recovered along with this piece (e.g. trimmings, filings) — reduces karigar loss and is credited to PM Book as "Ready for CO".
+                    </div>
                   </div>
 
                   <div className="form-group">
                     <div className="label">Metal Loss (calculated)</div>
                     <div style={{ padding:"8px 12px", background:"var(--dark3)", border:"1px solid #602020", color:"#d46060", borderRadius:"2px" }}>
                       {recvForm.receivedWeight !== ""
-                        ? calcMetalLoss(recvForm.receivedWeight, recvForm.recoveryWeight).toFixed(3)+"g"
+                        ? calcMetalLoss(recvForm.receivedWeight, recvForm.recoveryWeight, recvForm.looseMetalWeight).toFixed(3)+"g"
                         : "—"
                       }
                       {hasStones && stoneWeightGrams > 0 && recvForm.receivedWeight !== "" && (
