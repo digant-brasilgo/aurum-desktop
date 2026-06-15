@@ -143,6 +143,72 @@ function DateRangeFilter({ from, to, onChange, style }) {
     </div>
   );
 }
+// ── Searchable Bag/Group Select — type to filter a long list, click to choose ──
+function SearchableSelect({ value, onChange, options, placeholder, style, emptyLabel }) {
+  const [open, setOpen]   = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(()=>{
+    function onClickOutside(e){
+      if(wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setQuery(""); }
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return ()=>document.removeEventListener("mousedown", onClickOutside);
+  },[]);
+
+  const selected = options.find(o=>o.value===value);
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? options.filter(o=>o.label.toLowerCase().includes(q))
+    : options;
+
+  return (
+    <div ref={wrapRef} style={{ position:"relative", ...style }}>
+      <input
+        ref={inputRef}
+        value={open ? query : (selected ? selected.label : "")}
+        placeholder={placeholder || "— Select —"}
+        onFocus={()=>{ setOpen(true); setQuery(""); }}
+        onChange={e=>{ setOpen(true); setQuery(e.target.value); }}
+        style={{ width:"100%", cursor:"text" }}
+      />
+      {open && (
+        <div style={{
+          position:"absolute", top:"calc(100% + 2px)", left:0, right:0, zIndex:200,
+          maxHeight:"320px", overflowY:"auto",
+          background:"var(--dark3)", border:"1px solid var(--gold)", borderRadius:"2px",
+          boxShadow:"0 6px 18px rgba(0,0,0,0.5)",
+        }}>
+          <div
+            onMouseDown={()=>{ onChange(""); setOpen(false); setQuery(""); }}
+            style={{ padding:"6px 10px", fontSize:"11px", color:"var(--text-secondary)", cursor:"pointer",
+              borderBottom:"1px solid var(--dark4)" }}>
+            {emptyLabel || "— Select —"}
+          </div>
+          {filtered.length === 0 && (
+            <div style={{ padding:"8px 10px", fontSize:"11px", color:"var(--text-secondary)" }}>No matches</div>
+          )}
+          {filtered.map(o=>(
+            <div
+              key={o.value}
+              onMouseDown={()=>{ onChange(o.value); setOpen(false); setQuery(""); }}
+              style={{
+                padding:"6px 10px", fontSize:"11px", cursor:"pointer",
+                background: o.value===value ? "var(--gold)" : "transparent",
+                color:      o.value===value ? "#0a0a0f"    : "var(--text-primary)",
+              }}
+              onMouseEnter={e=>{ if(o.value!==value) e.currentTarget.style.background="var(--dark4)"; }}
+              onMouseLeave={e=>{ if(o.value!==value) e.currentTarget.style.background="transparent"; }}
+            >{o.label}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function useDateRange() {
   const getFYDates = () => {
     const n = new Date(); const m = n.getMonth(); const y = n.getFullYear();
@@ -2644,6 +2710,8 @@ function PMBookView({ db, updateDB, user }) {
   const [filterDir,    setFilterDir]    = useState("All"); // "All" | "IN" | "OUT"
   const [activeSection, setActiveSection] = useState("ledger"); // "ledger" | "ready" | "transit" | "stones"
   const [reconcileResult, setReconcileResult] = useState(null); // null | { rows, hasDiscrepancy }
+  const [extraMetalAudit, setExtraMetalAudit] = useState(null); // null | { bags:[{bagId, reversalTotal, currentEntries, currentTotal}] }
+  const [extraMetalSelected, setExtraMetalSelected] = useState({}); // { [entryId]: true }
 
   const isPM = user?.role === "production_manager" || user?.role === "data_manager";
   const canDeliver = isPM || user?.role === "co" || user?.role === "admin";
@@ -2961,6 +3029,40 @@ function PMBookView({ db, updateDB, user }) {
           }}>
           ⚖ Reconcile
         </button>
+        {isCO && (
+          <button className="btn btn-sm" style={{ borderColor:"#e0903a", color:"#e0903a" }}
+            onClick={()=>{ try {
+              // Extra Metal Audit — find bags where past issue-reversals credited extra
+              // metal back to PM Book (isExtraMetalReturn:true) but the original
+              // extraMetalIssues record(s) were never removed — i.e. counted twice.
+              const reversalsByBag = {};
+              (db.pmBook||[]).filter(e=>e.isExtraMetalReturn).forEach(e=>{
+                if(!reversalsByBag[e.bagNo]) reversalsByBag[e.bagNo]=[];
+                reversalsByBag[e.bagNo].push(e);
+              });
+              const bags = [];
+              Object.entries(reversalsByBag).forEach(([bagId, reversals])=>{
+                const reversalTotal = round3(reversals.reduce((s,e)=>s+(e.weight||0),0));
+                const currentEntries = (db.extraMetalIssues||[]).filter(e=>e.bagId===bagId && !e.groupLabel);
+                const currentTotal = round3(currentEntries.reduce((s,e)=>s+(e.weight||0),0));
+                if(currentEntries.length===0) return; // already clean
+                bags.push({ bagId, reversalTotal, reversals, currentEntries, currentTotal });
+              });
+              setExtraMetalAudit({ bags, checkedAt: now() });
+              // Pre-select entries (oldest first) up to each bag's reversalTotal
+              const sel = {};
+              bags.forEach(b=>{
+                let remaining = b.reversalTotal;
+                [...b.currentEntries].sort((x,y)=>x.date.localeCompare(y.date)).forEach(e=>{
+                  if(remaining > 0.0005) { sel[e.id]=true; remaining = round3(remaining - (e.weight||0)); }
+                });
+              });
+              setExtraMetalSelected(sel);
+            } catch(err) { alert("Extra Metal Audit error: " + err.message); }
+            }}>
+            🧮 Extra Metal Audit
+          </button>
+        )}
       </div>
 
       {/* ── FULL LEDGER ── */}
@@ -3396,6 +3498,88 @@ function PMBookView({ db, updateDB, user }) {
               </div>
             )}
             <button className="btn btn-gold" onClick={()=>setReconcileResult(null)}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Extra Metal Audit Modal ── */}
+      {extraMetalAudit && (
+        <div className="modal-overlay" onClick={()=>setExtraMetalAudit(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{ background:"var(--dark2)", border:`2px solid ${extraMetalAudit.bags.length>0?"#e0903a":"#4db88a"}`, borderRadius:"8px", padding:"24px 28px", width:"680px", maxWidth:"96vw", maxHeight:"82vh", overflowY:"auto" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:"10px", marginBottom:"16px" }}>
+              <span style={{ fontSize:"20px" }}>{extraMetalAudit.bags.length>0?"⚠":"✓"}</span>
+              <div className="modal-title" style={{ marginBottom:0, color:extraMetalAudit.bags.length>0?"#e0903a":"#4db88a" }}>
+                Extra Metal Audit — {extraMetalAudit.bags.length>0?`${extraMetalAudit.bags.length} bag(s) need review`:"All Clean"}
+              </div>
+            </div>
+
+            {extraMetalAudit.bags.length===0 ? (
+              <div style={{ fontSize:"12px", color:"var(--text-dim)", marginBottom:"12px" }}>
+                No stale "Extra Metal Issued" entries found. Every past extra-metal reversal has been fully cleaned up.
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize:"11px", color:"var(--text-dim)", marginBottom:"16px", lineHeight:"1.8" }}>
+                  These bags had an issue reversed in the past where extra metal was credited back to PM Book —
+                  but the original "Extra Metal Issued" record was never removed (older versions of the app didn't
+                  do this). That metal is <strong style={{ color:"#4db88a" }}>already correctly back in PM Book</strong> —
+                  these stale records only cause CO Metal Account "In Process" and bag memos to show extra metal as
+                  still "out" when it isn't. Pre-checked entries (oldest-first, summing to the reversed amount) are
+                  suggested for removal — review and adjust before confirming.
+                </div>
+                {extraMetalAudit.bags.map(b=>(
+                  <div key={b.bagId} style={{ marginBottom:"16px", padding:"10px 12px", background:"var(--dark3)", borderRadius:"4px", border:"1px solid var(--dark4)" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:"8px" }}>
+                      <div style={{ fontWeight:"bold", color:"var(--gold)" }}>{b.bagId}</div>
+                      <div style={{ fontSize:"11px", color:"var(--text-dim)" }}>
+                        Reversed &amp; returned to PM: <strong style={{ color:"#4db88a" }}>{fmtW(b.reversalTotal)}</strong>
+                        &nbsp;·&nbsp; Currently still marked "issued": <strong style={{ color:"#e0903a" }}>{fmtW(b.currentTotal)}</strong>
+                      </div>
+                    </div>
+                    {b.currentEntries.map(e=>{
+                      const karigarName = db.karigars?.find(k=>k.id===e.karigarId)?.name||"Unknown";
+                      return (
+                        <label key={e.id} style={{ display:"flex", alignItems:"center", gap:"8px", fontSize:"11px", padding:"4px 0", cursor:"pointer" }}>
+                          <input type="checkbox" checked={!!extraMetalSelected[e.id]}
+                            onChange={()=>setExtraMetalSelected(s=>({ ...s, [e.id]: !s[e.id] }))} />
+                          <span style={{ color:"var(--text-dim)", flex:1 }}>
+                            {fmt(e.date)} — {fmtW(e.weight)} {e.purity} {e.metalType} — {karigarName} — {e.reason||"Repair"}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ))}
+                <div style={{ fontSize:"11px", color:"var(--text-dim)", marginBottom:"12px" }}>
+                  Selected entries will be removed from the live "Extra Metal Issued" totals only. The original
+                  audit-log history (Complete Bag Timeline) is never deleted.
+                </div>
+              </>
+            )}
+
+            <div style={{ display:"flex", gap:"8px" }}>
+              <button className="btn" onClick={()=>{ setExtraMetalAudit(null); setExtraMetalSelected({}); }}>Close</button>
+              {extraMetalAudit.bags.length>0 && (
+                <button className="btn btn-red" onClick={()=>{
+                  const idsToRemove = new Set(Object.entries(extraMetalSelected).filter(([,v])=>v).map(([k])=>k));
+                  if(idsToRemove.size===0) { alert("No entries selected."); return; }
+                  if(!window.confirm(`Remove ${idsToRemove.size} stale "Extra Metal Issued" record(s)?\n\nThis only cleans up live totals — the metal is already correctly in PM Book, and the original audit-log history is kept.`)) return;
+                  updateDB(prev=>{
+                    const removed = (prev.extraMetalIssues||[]).filter(e=>idsToRemove.has(e.id));
+                    prev.extraMetalIssues = (prev.extraMetalIssues||[]).filter(e=>!idsToRemove.has(e.id));
+                    prev.auditLogs.push({ id:generateId(), action:"EXTRA_METAL_RECONCILED",
+                      entityId:"multiple", details:`Extra Metal Audit — removed ${removed.length} stale entries totalling ${fmtW(removed.reduce((s,e)=>s+(e.weight||0),0))} (already credited back to PM Book by past reversals)`,
+                      timestamp:now() });
+                    return prev;
+                  });
+                  setExtraMetalAudit(null);
+                  setExtraMetalSelected({});
+                  alert("✓ Extra Metal Audit — selected entries removed.");
+                }}>
+                  🗑 Remove Selected ({Object.values(extraMetalSelected).filter(Boolean).length})
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -8393,6 +8577,13 @@ The receipt can then be re-entered correctly.`;
             date:now(), notes:`Issue reversal — extra metal returned: ${fmtW(totalExtraReturned)} from ${tx.toDept}`,
             isReversal:true, isExtraMetalReturn:true,
           });
+          // Remove the original extraMetalIssues entries for this leg — they are now
+          // settled by the reversal-credit entries above. Leaving them would permanently
+          // double-count this weight in CO Metal Account "In Process", bag memos, and the
+          // "previously issued extra metal" list (the audit log entry for EXTRA_METAL_ISSUED
+          // still remains in db.auditLogs for the Complete Bag Timeline history).
+          const extraIdsThisLeg = new Set(extraForThisLeg.map(e=>e.id));
+          prev.extraMetalIssues = (prev.extraMetalIssues||[]).filter(e=>!extraIdsThisLeg.has(e.id));
         }
 
         // Restore bag to PM pending re-issue
@@ -8428,6 +8619,56 @@ The receipt can then be re-entered correctly.`;
           isReversal:true,
         });
 
+        // ── Reverse any stones issued/set during this leg (on or after this tx's timestamp) ──
+        // "Issue Stones" while the bag was at this department creates pmStoneBook OUT +
+        // coStoneStock OUT entries and adds to bag.stoneWeightGrams. If the metal issue
+        // itself is reversed, those stones must also come back to PM/CO — otherwise they
+        // stay marked "issued" forever and follow the bag to wherever it goes next.
+        const stoneOutForThisLeg = (prev.pmStoneBook||[]).filter(e=>
+          e.bagId===bag.id && e.direction==="OUT" && e.type==="ISSUED_TO_SETTING" && e.date >= txTimestamp
+        );
+        if(stoneOutForThisLeg.length > 0) {
+          const stoneTotals = {};
+          stoneOutForThisLeg.forEach(e=>{
+            if(!stoneTotals[e.stoneType]) stoneTotals[e.stoneType] = { pieces:0, carats:0, grams:0 };
+            stoneTotals[e.stoneType].pieces += e.pieces||0;
+            stoneTotals[e.stoneType].carats += e.carats||0;
+            stoneTotals[e.stoneType].grams  += e.grams||0;
+          });
+          let totalStoneGramsReturned = 0;
+          if(!prev.coStoneStock) prev.coStoneStock=[];
+          Object.entries(stoneTotals).forEach(([stoneType, t])=>{
+            totalStoneGramsReturned += t.grams;
+            prev.pmStoneBook.push({
+              id:generateId(), type:"RETURNED_UNUSED", direction:"IN",
+              bagId:bag.id, stoneType, pieces:t.pieces, carats:t.carats, grams:t.grams,
+              date:now(),
+              notes:`Issue reversal — stones returned to PM stock (${stoneType} ${t.carats.toFixed(3)}ct) — Bag ${bag.id}`,
+              isReversal:true, status:"Ready for CO",
+            });
+            prev.coStoneStock.push({
+              id:generateId(), type:"RETURNED_UNUSED", direction:"IN",
+              bagId:bag.id, stoneType, pieces:t.pieces, carats:t.carats, grams:t.grams,
+              date:now(),
+              notes:`Issue reversal — stones returned (${stoneType} ${t.carats.toFixed(3)}ct) — Bag ${bag.id}`,
+              isReversal:true,
+            });
+          });
+          // Remove the stoneLedger visit(s) created during this leg
+          if(prev.stoneLedger) {
+            prev.stoneLedger = prev.stoneLedger.filter(v=>!(v.bagId===bag.id && v.date >= txTimestamp));
+          }
+          // Reduce bag's stone weight / clear hasStones if nothing remains
+          if(b) {
+            b.stoneWeightGrams = round3(Math.max(0, (b.stoneWeightGrams||0) - totalStoneGramsReturned));
+            if(b.stoneWeightGrams <= 0) b.hasStones = false;
+            b.grossWeight = round3((b.netMetalWeight||b.currentWeight||0) + (b.stoneWeightGrams||0));
+          }
+          prev.auditLogs.push({ id:generateId(), action:"STONES_REVERSED", entityId:bag.id,
+            details:`Issue reversal — stones set during this leg returned to PM/CO stock (${Object.entries(stoneTotals).map(([t,v])=>`${t}: ${v.carats.toFixed(3)}ct`).join(", ")})`,
+            timestamp:now() });
+        }
+
         // Audit
         prev.auditLogs.push({ id:generateId(), action:"TX_REVERSED", entityId:bag.id,
           details:`Issue to ${tx.toDept} reversed by ${user?.displayName||user?.role} — bag${totalExtraReturned>0?" + "+fmtW(totalExtraReturned)+" extra":""} returned to PM. Was ${fmtW(tx.issuedWeight)}`,
@@ -8454,6 +8695,10 @@ The receipt can then be re-entered correctly.`;
             // issuedWeight should already be net metal; use it directly
             b.currentWeight  = tx2.issuedWeight;
             b.netMetalWeight = tx2.issuedWeight;
+            // Stones themselves stay exactly as they are — the piece is still "at toDept,
+            // stones set, not yet received" (the correct immediate-earlier-stage state).
+            // Just keep grossWeight consistent with the restored net metal weight.
+            b.grossWeight    = round3(tx2.issuedWeight + (b.stoneWeightGrams||0));
           } else {
             b.currentWeight = tx2.issuedWeight; // back to what was issued to that dept
           }
@@ -8922,7 +9167,30 @@ The receipt can then be re-entered correctly.`;
                 <td>{t.toDept}</td>
                 <td className="weight-text">{fmtW(t.issuedWeight)}</td>
                 <td>{t.receivedWeight!=null?fmtW(t.receivedWeight):"—"}</td>
-                <td style={{ color:"#4db88a" }}>{t.recoveryWeight>0?fmtW(t.recoveryWeight):"—"}</td>
+                <td>
+                  {t.recoveryWeight>0
+                    ? <span style={{ color:"#4db88a" }} title="Extra metal received back from karigar">↓{fmtW(t.recoveryWeight)}</span>
+                    : (() => {
+                        // For an open (not-yet-received) leg, show any extra metal ISSUED to the
+                        // karigar during this leg (from db.extraMetalIssues) — issuedWeight above
+                        // already includes this, this is just a visibility cue.
+                        if(t.receivedWeight!=null) return "—";
+                        const extraForLeg = (db.extraMetalIssues||[]).filter(e=>
+                          e.bagId===t.bagNo &&
+                          (t.groupLabel ? e.groupLabel===t.groupLabel : !e.groupLabel) &&
+                          e.date >= t.timestamp
+                        );
+                        const extraSum = extraForLeg.reduce((s,e)=>s+(e.weight||0),0);
+                        if(extraSum <= 0) return "—";
+                        const karigarNames = [...new Set(extraForLeg.map(e=>db.karigars?.find(k=>k.id===e.karigarId)?.name).filter(Boolean))].join(", ");
+                        return (
+                          <span style={{ color:"#e0903a" }} title={`Extra metal issued mid-job${karigarNames?" to "+karigarNames:""} — included in Issued total`}>
+                            ↑{fmtW(extraSum)}
+                          </span>
+                        );
+                      })()
+                  }
+                </td>
                 <td className="loss-text">{t.lossWeight!=null?fmtW(t.lossWeight):"—"}</td>
                 {canEditStock && <td>
                   <div style={{ display:"flex", gap:"4px" }}>
@@ -10352,15 +10620,27 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
           <div className="card card-gold" style={{ marginBottom:"12px" }}>
             <div className="section-title"><span className="section-title-accent"></span>Select {entity==="bag"?"Bag":"Group"}</div>
             {entity==="bag" ? (
-              <select value={selectedBagId} onChange={e=>{ setSelectedBagId(e.target.value); setMode("receive"); }}>
-                <option value="">— Select Bag —</option>
-                {inProcessBags.map(b=><option key={b.id} value={b.id}>{b.id} · {b.designId||"—"} {b.isBroken?"[SPLIT — "+((db.groups||[]).filter(g=>g.bagId===b.id&&g.status!=="Completed").length)+" groups]":"| "+b.currentDept+" | "+fmtW(b.currentWeight)}</option>)}
-              </select>
+              <SearchableSelect
+                value={selectedBagId}
+                onChange={v=>{ setSelectedBagId(v); setMode("receive"); }}
+                placeholder="— Select Bag — (type to search)"
+                emptyLabel="— Select Bag —"
+                options={inProcessBags.map(b=>({
+                  value: b.id,
+                  label: `${b.id} · ${b.designId||"—"} ${b.isBroken?"[SPLIT — "+((db.groups||[]).filter(g=>g.bagId===b.id&&g.status!=="Completed").length)+" groups]":"| "+b.currentDept+" | "+fmtW(b.currentWeight)}`,
+                }))}
+              />
             ):(
-              <select value={selectedGroupId} onChange={e=>{ setSelectedGroupId(e.target.value); setMode("receive"); }}>
-                <option value="">— Select Group —</option>
-                {inProcessGroups.map(g=><option key={g.id} value={g.id}>{g.label} — {g.partCount||g.unitCount} pcs | {g.currentDept} | {fmtW(g.currentWeight)}</option>)}
-              </select>
+              <SearchableSelect
+                value={selectedGroupId}
+                onChange={v=>{ setSelectedGroupId(v); setMode("receive"); }}
+                placeholder="— Select Group — (type to search)"
+                emptyLabel="— Select Group —"
+                options={inProcessGroups.map(g=>({
+                  value: g.id,
+                  label: `${g.label} — ${g.partCount||g.unitCount} pcs | ${g.currentDept} | ${fmtW(g.currentWeight)}`,
+                }))}
+              />
             )}
 
             {((entity==="bag"&&bag)||(entity==="group"&&group)) && (
@@ -12089,9 +12369,17 @@ function StonesView({ db, updateDB }) {
   const [lossForm, setLossForm] = useState({ dept:"", stoneType:"Diamond", pieces:"", carats:"", lossType:"Lost", notes:"" });
   const STONE_TYPES = getStoneTypes(db);
 
-  const bag = db.bags.find(b=>b.id===selectedBagId);
-  const bagStoneRecords = db.stoneLedger ? db.stoneLedger.filter(s=>s.bagId===selectedBagId) : [];
-  const bagStoneLoss = db.stoneLoss ? db.stoneLoss.filter(s=>s.bagId===selectedBagId) : [];
+  // selectedBagId may be a plain bag id ("BGS-XX") or a composite "BAGID::GROUPLABEL"
+  // when a split bag's part at Setting was chosen from the dropdown below.
+  const [bagIdSel, groupLabelSel] = (selectedBagId||"").split("::");
+  const actualBagId = bagIdSel;
+  const selectedGroup = groupLabelSel
+    ? (db.groups||[]).find(g=>g.bagId===actualBagId && g.label===groupLabelSel)
+    : null;
+
+  const bag = db.bags.find(b=>b.id===actualBagId);
+  const bagStoneRecords = db.stoneLedger ? db.stoneLedger.filter(s=>s.bagId===actualBagId) : [];
+  const bagStoneLoss = db.stoneLoss ? db.stoneLoss.filter(s=>s.bagId===actualBagId) : [];
 
   const nextVisit = bagStoneRecords.length>0 ? Math.max(...bagStoneRecords.map(r=>r.visitNo))+1 : 1;
 
@@ -12124,7 +12412,7 @@ function StonesView({ db, updateDB }) {
     updateDB(prev=>{
       if(!prev.stoneLedger) prev.stoneLedger=[];
       if(!prev.stoneLoss) prev.stoneLoss=[];
-      const b = prev.bags.find(x=>x.id===selectedBagId);
+      const b = prev.bags.find(x=>x.id===actualBagId);
 
       // Build stone entries (may be empty if only returning stones)
       const stones = validStones.map(s=>{
@@ -12145,7 +12433,7 @@ function StonesView({ db, updateDB }) {
       const standaloneReturns = [];
       if(!validStones.length && hasReturns) {
         // Returning stones without issuing new ones — amend the latest visit
-        const latestVisit = prev.stoneLedger.filter(r=>r.bagId===selectedBagId).sort((a,b)=>b.visitNo-a.visitNo)[0];
+        const latestVisit = prev.stoneLedger.filter(r=>r.bagId===actualBagId).sort((a,b)=>b.visitNo-a.visitNo)[0];
         if(latestVisit) {
           // Add return info to existing stones in latest visit
           issueForm.returnedUnused.filter(r=>r.stoneType&&(r.pieces||r.carats)).forEach(r=>{
@@ -12196,11 +12484,11 @@ function StonesView({ db, updateDB }) {
           issueForm.returnedBroken.filter(r=>r.stoneType&&(r.pieces||r.carats)).forEach(r=>{
             retOnlyStones.push({ stoneType:r.stoneType, pieces:0, carats:0, grams:0, returnedUnusedPieces:0, returnedUnusedCarats:0, returnedBrokenPieces:parseInt(r.pieces)||0, returnedBrokenCarats:parseFloat(r.carats)||0, netCarats:0, netGrams:0, isReturnOnly:true });
           });
-          prev.stoneLedger.push({ id:generateId(), bagId:selectedBagId, visitNo:1, visitLabel:"Setting Visit #1 — Returns Only", date:now(), stones:retOnlyStones, totalNetCarats:0, totalNetGrams:0, karigarId:issueForm.karigarId, notes:issueForm.notes||"Stones returned to stock" });
+          prev.stoneLedger.push({ id:generateId(), bagId:actualBagId, visitNo:1, visitLabel:"Setting Visit #1 — Returns Only", date:now(), stones:retOnlyStones, totalNetCarats:0, totalNetGrams:0, karigarId:issueForm.karigarId, notes:issueForm.notes||"Stones returned to stock" });
         }
       } else if(validStones.length > 0) {
         // Normal: new stones being set (returns embedded in stones array above)
-        prev.stoneLedger.push({ id:generateId(), bagId:selectedBagId, visitNo:nextVisit, visitLabel:`Setting Visit #${nextVisit}`, date:now(), stones, totalNetCarats:stones.reduce((s,x)=>s+x.netCarats,0), totalNetGrams, karigarId:issueForm.karigarId, notes:issueForm.notes });
+        prev.stoneLedger.push({ id:generateId(), bagId:actualBagId, visitNo:nextVisit, visitLabel:`Setting Visit #${nextVisit}`, date:now(), stones, totalNetCarats:stones.reduce((s,x)=>s+x.netCarats,0), totalNetGrams, karigarId:issueForm.karigarId, notes:issueForm.notes });
       }
 
       // PM Stone Book — OUT: PM issues stones to karigar for setting
@@ -12209,20 +12497,20 @@ function StonesView({ db, updateDB }) {
         stones.forEach(s=>{
           prev.pmStoneBook.push({
             id:generateId(), type:"ISSUED_TO_SETTING", direction:"OUT",
-            bagId:selectedBagId, stoneType:s.stoneType,
+            bagId:actualBagId, stoneType:s.stoneType,
             pieces:s.pieces, carats:s.carats, grams:s.grams,
             date:now(),
-            notes:`Setting Visit #${nextVisit} — Bag ${selectedBagId}`,
+            notes:`Setting Visit #${nextVisit} — Bag ${actualBagId}`,
             visitNo:nextVisit,
           });
           // CO Stone Stock — OUT: stones leave CO stock when issued to setting via PM
           if(!prev.coStoneStock) prev.coStoneStock=[];
           prev.coStoneStock.push({
             id:generateId(), type:"ISSUED_TO_PM", direction:"OUT",
-            bagId:selectedBagId, stoneType:s.stoneType,
+            bagId:actualBagId, stoneType:s.stoneType,
             pieces:s.pieces, carats:s.carats, grams:s.grams,
             date:now(),
-            notes:`Issued to Setting via PM — Setting Visit #${nextVisit} Bag ${selectedBagId}`,
+            notes:`Issued to Setting via PM — Setting Visit #${nextVisit} Bag ${actualBagId}`,
           });
         });
       }
@@ -12251,37 +12539,37 @@ function StonesView({ db, updateDB }) {
         prev.stoneStock.push({
           id:generateId(), type:"RETURN_UNUSED",
           stoneType:r.stoneType, pieces:pcs, carats:ct,
-          bagId:selectedBagId, visitNo:nextVisit,
-          notes:`Returned unused from Setting Visit #${nextVisit} — Bag ${selectedBagId}`,
+          bagId:actualBagId, visitNo:nextVisit,
+          notes:`Returned unused from Setting Visit #${nextVisit} — Bag ${actualBagId}`,
           date:now(),
         });
         // PM Stone Book — IN: unused stones return to PM
         if(!prev.pmStoneBook) prev.pmStoneBook=[];
         prev.pmStoneBook.push({
           id:generateId(), type:"RETURNED_UNUSED", direction:"IN",
-          bagId:selectedBagId, stoneType:r.stoneType,
+          bagId:actualBagId, stoneType:r.stoneType,
           pieces:pcs, carats:ct, grams:ct*0.2,
           date:now(),
-          notes:`Unused stones returned — Setting Visit #${nextVisit} Bag ${selectedBagId}`,
+          notes:`Unused stones returned — Setting Visit #${nextVisit} Bag ${actualBagId}`,
           visitNo:nextVisit, status:"Ready for CO",
         });
         // CO Stone Stock — IN: unused stones credited back to CO
         if(!prev.coStoneStock) prev.coStoneStock=[];
         prev.coStoneStock.push({
           id:generateId(), type:"RETURNED_UNUSED", direction:"IN",
-          bagId:selectedBagId, stoneType:r.stoneType,
+          bagId:actualBagId, stoneType:r.stoneType,
           pieces:pcs, carats:ct, grams:ct*0.2,
           date:now(),
-          notes:`Unused ${r.stoneType} returned from Setting Visit #${nextVisit} — Bag ${selectedBagId}`,
+          notes:`Unused ${r.stoneType} returned from Setting Visit #${nextVisit} — Bag ${actualBagId}`,
         });
       });
       issueForm.returnedBroken.filter(r=>r.stoneType&&(r.pieces||r.carats)).forEach(r=>{
         const bPcs=parseInt(r.pieces)||0; const bCt=parseFloat(r.carats)||0;
-        prev.stoneStock.push({ id:generateId(), type:"RETURN_BROKEN", stoneType:r.stoneType, pieces:bPcs, carats:bCt, bagId:selectedBagId, visitNo:nextVisit, notes:`Returned broken from Setting Visit #${nextVisit} — Bag ${selectedBagId}`, date:now() });
+        prev.stoneStock.push({ id:generateId(), type:"RETURN_BROKEN", stoneType:r.stoneType, pieces:bPcs, carats:bCt, bagId:actualBagId, visitNo:nextVisit, notes:`Returned broken from Setting Visit #${nextVisit} — Bag ${actualBagId}`, date:now() });
         if(!prev.coStoneStock) prev.coStoneStock=[];
-        prev.coStoneStock.push({ id:generateId(), type:"RETURNED_BROKEN", direction:"IN", bagId:selectedBagId, stoneType:r.stoneType, pieces:bPcs, carats:bCt, grams:bCt*0.2, date:now(), notes:`Broken ${r.stoneType} returned from Visit #${nextVisit} — Bag ${selectedBagId} (damaged — back in CO stock at reduced value)` });
+        prev.coStoneStock.push({ id:generateId(), type:"RETURNED_BROKEN", direction:"IN", bagId:actualBagId, stoneType:r.stoneType, pieces:bPcs, carats:bCt, grams:bCt*0.2, date:now(), notes:`Broken ${r.stoneType} returned from Visit #${nextVisit} — Bag ${actualBagId} (damaged — back in CO stock at reduced value)` });
         if(!prev.pmStoneBook) prev.pmStoneBook=[];
-        prev.pmStoneBook.push({ id:generateId(), type:"RETURNED_BROKEN", direction:"IN", bagId:selectedBagId, stoneType:r.stoneType, pieces:bPcs, carats:bCt, grams:bCt*0.2, date:now(), notes:`Broken ${r.stoneType} returned — Visit #${nextVisit} Bag ${selectedBagId}`, visitNo:nextVisit });
+        prev.pmStoneBook.push({ id:generateId(), type:"RETURNED_BROKEN", direction:"IN", bagId:actualBagId, stoneType:r.stoneType, pieces:bPcs, carats:bCt, grams:bCt*0.2, date:now(), notes:`Broken ${r.stoneType} returned — Visit #${nextVisit} Bag ${actualBagId}`, visitNo:nextVisit });
       });
 
       const unusedReturnedPcs = issueForm.returnedUnused.reduce((s,r)=>s+(parseInt(r.pieces)||0),0);
@@ -12294,7 +12582,7 @@ function StonesView({ db, updateDB }) {
       if(unusedReturnedPcs>0) detailParts.push(`Returned Unused: ${unusedReturnedPcs}pcs / ${unusedReturnedCt.toFixed(3)}ct`);
       if(brokenReturnedPcs>0) detailParts.push(`Returned Broken: ${brokenReturnedPcs}pcs / ${brokenReturnedCt.toFixed(3)}ct`);
 
-      prev.auditLogs.push({ id:generateId(), action:"STONES_ISSUED", entityId:selectedBagId, details:`Visit #${nextVisit}: ${detailParts.join(" | ")}`, timestamp:now() });
+      prev.auditLogs.push({ id:generateId(), action:"STONES_ISSUED", entityId:actualBagId, details:`Visit #${nextVisit}: ${detailParts.join(" | ")}`, timestamp:now() });
       return prev;
     });
     setShowIssue(false);
@@ -12309,16 +12597,16 @@ function StonesView({ db, updateDB }) {
     const isActualLoss = lossForm.lossType !== "Found & Returned";
     updateDB(prev=>{
       if(!prev.stoneLoss) prev.stoneLoss=[];
-      prev.stoneLoss.push({ id:generateId(), bagId:selectedBagId, dept:lossForm.dept, stoneType:lossForm.stoneType, pieces:lostPcs, carats:lostCt, grams:isActualLoss?lostGrams:0, lossType:lossForm.lossType, notes:lossForm.notes, date:now() });
-      const b=prev.bags.find(x=>x.id===selectedBagId);
+      prev.stoneLoss.push({ id:generateId(), bagId:actualBagId, dept:lossForm.dept, stoneType:lossForm.stoneType, pieces:lostPcs, carats:lostCt, grams:isActualLoss?lostGrams:0, lossType:lossForm.lossType, notes:lossForm.notes, date:now() });
+      const b=prev.bags.find(x=>x.id===actualBagId);
       if(b && isActualLoss){ b.stoneWeightGrams=Math.max(0,(b.stoneWeightGrams||0)-lostGrams); b.grossWeight=Math.max(0,(b.grossWeight||0)-lostGrams); }
       if(isActualLoss) {
         if(!prev.coStoneStock) prev.coStoneStock=[];
-        prev.coStoneStock.push({ id:generateId(), type:lossForm.lossType==="Broken"?"BROKEN":"LOST", direction:"OUT", bagId:selectedBagId, stoneType:lossForm.stoneType, pieces:lostPcs, carats:lostCt, grams:lostGrams, date:now(), notes:`${lossForm.lossType}: ${lossForm.stoneType} ${lostCt}ct in ${lossForm.dept||"dept"} — Bag ${selectedBagId}${lossForm.notes?" | "+lossForm.notes:""}` });
+        prev.coStoneStock.push({ id:generateId(), type:lossForm.lossType==="Broken"?"BROKEN":"LOST", direction:"OUT", bagId:actualBagId, stoneType:lossForm.stoneType, pieces:lostPcs, carats:lostCt, grams:lostGrams, date:now(), notes:`${lossForm.lossType}: ${lossForm.stoneType} ${lostCt}ct in ${lossForm.dept||"dept"} — Bag ${actualBagId}${lossForm.notes?" | "+lossForm.notes:""}` });
         if(!prev.pmStoneBook) prev.pmStoneBook=[];
-        prev.pmStoneBook.push({ id:generateId(), type:"STONE_LOSS", direction:"OUT", bagId:selectedBagId, stoneType:lossForm.stoneType, pieces:lostPcs, carats:lostCt, grams:lostGrams, date:now(), notes:`${lossForm.lossType}: ${lossForm.stoneType} ${lostCt}ct in ${lossForm.dept||"dept"} — Bag ${selectedBagId}`, lossType:lossForm.lossType });
+        prev.pmStoneBook.push({ id:generateId(), type:"STONE_LOSS", direction:"OUT", bagId:actualBagId, stoneType:lossForm.stoneType, pieces:lostPcs, carats:lostCt, grams:lostGrams, date:now(), notes:`${lossForm.lossType}: ${lossForm.stoneType} ${lostCt}ct in ${lossForm.dept||"dept"} — Bag ${actualBagId}`, lossType:lossForm.lossType });
       }
-      prev.auditLogs.push({ id:generateId(), action:"STONE_LOSS", entityId:selectedBagId, details:`${lossForm.lossType}: ${lossForm.stoneType} ${lostCt}ct (${lostGrams.toFixed(3)}g) in ${lossForm.dept}`, timestamp:now() });
+      prev.auditLogs.push({ id:generateId(), action:"STONE_LOSS", entityId:actualBagId, details:`${lossForm.lossType}: ${lossForm.stoneType} ${lostCt}ct (${lostGrams.toFixed(3)}g) in ${lossForm.dept}`, timestamp:now() });
       return prev;
     });
     setShowLoss(false);
@@ -12336,21 +12624,64 @@ function StonesView({ db, updateDB }) {
       <div style={{ display:"flex", alignItems:"center", gap:"12px", marginBottom:"20px" }}>
         <div style={{ fontSize:"10px", color:"var(--text-secondary)", letterSpacing:"4px", fontWeight:"bold", textTransform:"uppercase", paddingBottom:"12px", borderBottom:"1px solid var(--dark4)", marginBottom:"20px" }}>💎 STONE TRACKING</div>
         <div style={{ marginLeft:"auto", display:"flex", gap:"8px" }}>
-          <select style={{ width:"280px" }} value={selectedBagId} onChange={e=>{ setSelectedBagId(e.target.value); setShowIssue(false); setShowLoss(false); }}>
-            <option value="">— Select Bag —</option>
-            {db.bags.filter(b=>b.status==="In Process"||b.hasStones).map(b=><option key={b.id} value={b.id}>{b.hasStones?"💎 ":""}{b.id} — {b.designId||"—"} ({b.currentDept})</option>)}
-          </select>
-          {selectedBagId && <button className="btn btn-gold" onClick={()=>{ setShowIssue(!showIssue); setShowLoss(false); }}>💎 Issue Stones</button>}
-          {selectedBagId && bag?.hasStones && <button className="btn btn-red" onClick={()=>{ setShowLoss(!showLoss); setShowIssue(false); }}>⚠ Stone Loss</button>}
+          <SearchableSelect
+            style={{ width:"280px" }}
+            value={selectedBagId}
+            onChange={v=>{ setSelectedBagId(v); setShowIssue(false); setShowLoss(false); }}
+            placeholder="— Select Bag — (type to search)"
+            emptyLabel="— Select Bag —"
+            options={(()=>{
+              // Stones are issued/set only at the Setting department. For split bags,
+              // bag.currentDept is frozen at the moment of splitting and no longer reflects
+              // reality — the pieces' real locations + weights live on db.groups. So for a
+              // split bag, list ONE entry per active group currently at Setting, showing
+              // that group's own (split) weight — not the bag's combined weight. A bag's
+              // other parts (e.g. at Pre-Polishing) don't need stones and are not listed.
+              const opts = [];
+              db.bags.filter(b=>b.status==="In Process"||b.hasStones).forEach(b=>{
+                if(b.isBroken) {
+                  const settingGroups = (db.groups||[]).filter(g=>
+                    g.bagId===b.id && g.status!=="Completed" && g.currentDept==="Setting"
+                  );
+                  settingGroups.forEach(g=>{
+                    opts.push({
+                      value: `${b.id}::${g.label}`,
+                      label: `${b.hasStones?"💎 ":""}${b.id} — ${b.designId||"—"} (Setting · ${g.label.split("-").pop()} · ${fmtW(g.currentWeight)})`,
+                    });
+                  });
+                  // Fallback: if this bag already has stones but no part is currently at
+                  // Setting (e.g. stones were set earlier, piece has since moved on), still
+                  // list the bag itself so its stone history / loss records remain reachable.
+                  if(settingGroups.length===0 && b.hasStones) {
+                    const activeGroups = (db.groups||[]).filter(g=>g.bagId===b.id && g.status!=="Completed");
+                    const deptLabel = activeGroups.length>0
+                      ? activeGroups.map(g=>`${g.currentDept} (${g.label.split("-").pop()})`).join(" + ")
+                      : b.currentDept;
+                    opts.push({ value: b.id, label: `💎 ${b.id} — ${b.designId||"—"} (${deptLabel})` });
+                  }
+                } else {
+                  if(b.currentDept==="Setting" || b.hasStones) {
+                    opts.push({
+                      value: b.id,
+                      label: `${b.hasStones?"💎 ":""}${b.id} — ${b.designId||"—"} (${b.currentDept})`,
+                    });
+                  }
+                }
+              });
+              return opts;
+            })()}
+          />
+          {actualBagId && <button className="btn btn-gold" onClick={()=>{ setShowIssue(!showIssue); setShowLoss(false); }}>💎 Issue Stones</button>}
+          {actualBagId && bag?.hasStones && <button className="btn btn-red" onClick={()=>{ setShowLoss(!showLoss); setShowIssue(false); }}>⚠ Stone Loss</button>}
         </div>
       </div>
 
       {bag && (
         <div className="mini-stats" style={{ marginBottom:"16px" }}>
           {[
-            { label:"Net Metal Weight", value:fmtW(bag.netMetalWeight||bag.currentWeight||bag.issuedWeight), sub:"metal only", color:"var(--gold-light)", accent:"var(--gold)" },
+            { label:"Net Metal Weight", value:fmtW(selectedGroup ? selectedGroup.currentWeight : (bag.netMetalWeight||bag.currentWeight||bag.issuedWeight)), sub:selectedGroup?`metal only — ${selectedGroup.label.split("-").pop()} part`:"metal only", color:"var(--gold-light)", accent:"var(--gold)" },
             { label:"Stone Weight", value:fmtW(bag.stoneWeightGrams||0), sub:fmtC(totalStoneCarats)+" total", color:"#7090c0", accent:"#4060a0" },
-            { label:"Gross Weight", value:fmtW(bag.grossWeight||bag.currentWeight||bag.issuedWeight), sub:"metal + stones", color:"var(--gold-light)", accent:"var(--gold-dim)" },
+            { label:"Gross Weight", value:fmtW(selectedGroup ? round3(selectedGroup.currentWeight + (bag.stoneWeightGrams||0)) : (bag.grossWeight||bag.currentWeight||bag.issuedWeight)), sub:"metal + stones", color:"var(--gold-light)", accent:"var(--gold-dim)" },
             { label:"Setting Visits", value:bagStoneRecords.length, sub:bagStoneLoss.length+" loss events", color:"var(--gold-light)", accent:"var(--info)" },
           ].map((k,i)=>(
             <div key={i} className="mini-stat" style={{ borderTop:`2px solid ${k.accent}` }}>
@@ -12554,12 +12885,12 @@ function StonesView({ db, updateDB }) {
       )}
 
       <div className="card card-gold">
-        <div className="section-title"><span className="section-title-accent"></span>Stone History{selectedBagId?" — "+selectedBagId:""}</div>
-        {!selectedBagId && <div style={{ textAlign:"center", color:"var(--text-dim)", fontSize:"11px", letterSpacing:"1.5px", padding:"24px", textTransform:"uppercase" }}>Select a bag above to view stone records</div>}
-        {selectedBagId && bagStoneRecords.length===0 && <div style={{ textAlign:"center", color:"var(--text-dim)", fontSize:"11px", letterSpacing:"1.5px", padding:"24px", textTransform:"uppercase" }}>No stones issued yet for this bag. Click "💎 Issue Stones" above.</div>}
+        <div className="section-title"><span className="section-title-accent"></span>Stone History{actualBagId?" — "+actualBagId+(selectedGroup?` (${selectedGroup.label.split("-").pop()} part — ${fmtW(selectedGroup.currentWeight)})`:""):""}</div>
+        {!actualBagId && <div style={{ textAlign:"center", color:"var(--text-dim)", fontSize:"11px", letterSpacing:"1.5px", padding:"24px", textTransform:"uppercase" }}>Select a bag above to view stone records</div>}
+        {actualBagId && bagStoneRecords.length===0 && <div style={{ textAlign:"center", color:"var(--text-dim)", fontSize:"11px", letterSpacing:"1.5px", padding:"24px", textTransform:"uppercase" }}>No stones issued yet for this bag. Click "💎 Issue Stones" above.</div>}
         {/* Returned unused stones not linked to a visit */}
-        {selectedBagId && (()=>{
-          const unlinked = (db.stoneStock||[]).filter(s=>s.bagId===selectedBagId && s.type==="RETURN_UNUSED" && !bagStoneRecords.some(r=>r.visitNo===s.visitNo));
+        {actualBagId && (()=>{
+          const unlinked = (db.stoneStock||[]).filter(s=>s.bagId===actualBagId && s.type==="RETURN_UNUSED" && !bagStoneRecords.some(r=>r.visitNo===s.visitNo));
           if(unlinked.length===0) return null;
           return (
             <div style={{ marginBottom:"10px", background:"rgba(77,184,138,0.07)", border:"1px solid rgba(77,184,138,0.2)", borderRadius:"3px", padding:"10px 12px", fontSize:"12px" }}>
@@ -17551,6 +17882,7 @@ function ReportsView({ db, setModal, user, dateRange }) {
     { id:"bags",       label:"◈ Bags",         pmVisible:false },
     { id:"codelivery", label:"↑ CO Delivery",  pmVisible:false },
     { id:"metalstock", label:"⬡ Metal Stock",  pmVisible:false },
+    { id:"karigarbal", label:"⚖ Karigar/PM Balance", pmVisible:false },
     { id:"dust",       label:"◎ Machine Dust", pmVisible:true  },
     { id:"pl",         label:"₹ P&L",          pmVisible:false },
     { id:"monthly",    label:"Monthly",             pmVisible:false },
@@ -17562,11 +17894,12 @@ function ReportsView({ db, setModal, user, dateRange }) {
     karigars:   [{id:"list",label:"Karigar Report"},{id:"monthly",label:"Monthly"}],
     bags:       [{id:"summary",label:"Bag Summary"},{id:"detail",label:"Bag Detail"}],
     metalstock: [{id:"reconcile",label:"Reconciliation"},{id:"alloyed",label:"Alloyed by Purity"}],
+    karigarbal: [{id:"withkarigars",label:"With Karigars"},{id:"withpm",label:"With PM"},{id:"losshistory",label:"Loss History"}],
   };
 
   const setReportTab = id => {
     setReport(id);
-    const defaults={production:"dept",karigars:"list",bags:"summary",metalstock:"reconcile"};
+    const defaults={production:"dept",karigars:"list",bags:"summary",metalstock:"reconcile",karigarbal:"withkarigars"};
     if(defaults[id]) setSubView(defaults[id]);
     setFilterKarigar(""); setFilterDept(""); setFilterPurity(""); setFilterMetal(""); setFilterBag(""); setFilterCustomer("");
   };
@@ -17578,6 +17911,7 @@ function ReportsView({ db, setModal, user, dateRange }) {
     bags:       ["purity","metal","bag","customer"],
     codelivery: ["purity","metal","customer"],
     metalstock: ["metal"],
+    karigarbal: ["karigar","purity","metal"],
     dust:       [],
     pl:         [],
     monthly:    [],
@@ -18116,6 +18450,216 @@ function ReportsView({ db, setModal, user, dateRange }) {
                   })}
                 </tbody>
               </table>
+            </div>
+          );
+        })()}
+
+        {/* ════ KARIGAR / PM METAL BALANCE — WITH KARIGARS ════ */}
+        {report==="karigarbal" && subView==="withkarigars" && (()=>{
+          // Metal currently sitting WITH each karigar = sum of issuedWeight on open
+          // transactions (receivedWeight==null), already inclusive of any mid-job extra
+          // metal (handleExtraMetal adds it directly to issuedWeight). Ideally each
+          // karigar's balance clears to zero once the job is received back — anything
+          // shown here is metal currently out on an active job.
+          const openTxs = (db.transactions||[]).filter(t=>
+            t.receivedWeight==null && t.type!=="PARTIAL_RECALL" && t.karigarId &&
+            (!filterKarigar || t.karigarId===filterKarigar) &&
+            (!filterPurity  || t.purity===filterPurity) &&
+            (!filterMetal   || t.metalType===filterMetal)
+          );
+          const byKarigar = {};
+          openTxs.forEach(t=>{
+            const k = db.karigars.find(x=>x.id===t.karigarId);
+            const kName = k?.name || "Unknown";
+            if(!byKarigar[t.karigarId]) byKarigar[t.karigarId] = { name:kName, items:[], byPurity:{} };
+            byKarigar[t.karigarId].items.push(t);
+            const pKey = `${t.purity}||${t.metalType||"Gold"}`;
+            if(!byKarigar[t.karigarId].byPurity[pKey]) byKarigar[t.karigarId].byPurity[pKey] = { purity:t.purity, metalType:t.metalType||"Gold", total:0 };
+            byKarigar[t.karigarId].byPurity[pKey].total += t.issuedWeight||0;
+          });
+          const karigarRows = Object.values(byKarigar).sort((a,b)=>a.name.localeCompare(b.name));
+          return (
+            <div className="card card-gold">
+              <div className="section-title"><span className="section-title-accent"></span>Metal Currently With Karigars</div>
+              <div style={{ fontSize:"11px", color:"var(--text-dim)", marginBottom:"12px", lineHeight:"1.8" }}>
+                Each row is metal currently issued (open job, not yet received back) — already including any
+                mid-job "Extra Metal" issued. Once a karigar receives nothing back AND no jobs are open for them,
+                this balance is zero. Anything shown here is metal physically out with that karigar right now.
+              </div>
+              {karigarRows.length===0
+                ? <div style={{ color:"var(--text-dim)", fontSize:"11px", padding:"12px 0" }}>No open jobs with karigars{filterKarigar||filterPurity||filterMetal?" matching these filters":""}.</div>
+                : karigarRows.map(k=>(
+                    <div key={k.name} style={{ marginBottom:"14px", padding:"10px 12px", background:"var(--dark3)", borderRadius:"4px", border:"1px solid var(--dark4)" }}>
+                      <div style={{ fontWeight:"bold", color:"var(--gold)", marginBottom:"6px" }}>{k.name}</div>
+                      <div style={{ display:"flex", gap:"16px", flexWrap:"wrap", marginBottom:"8px" }}>
+                        {Object.values(k.byPurity).sort((a,b)=>b.total-a.total).map(p=>(
+                          <div key={p.purity+p.metalType} style={{ fontSize:"11px" }}>
+                            <span className="badge badge-blue" style={{ fontSize:"9px" }}>{p.purity} {p.metalType}</span>
+                            &nbsp;<strong style={{ color:"var(--gold-light)" }}>{fmtW(p.total)}</strong>
+                          </div>
+                        ))}
+                      </div>
+                      <table>
+                        <thead><tr><th>Bag / Group</th><th>Purity</th><th>Dept</th><th className="num">Issued (g)</th><th>Since</th></tr></thead>
+                        <tbody>
+                          {k.items.sort((a,b)=>(a.timestamp||a.date||"").localeCompare(b.timestamp||b.date||"")).map(t=>(
+                            <tr key={t.id}>
+                              <td style={{ color:"var(--gold)", fontFamily:"'Courier New',monospace" }}>{t.bagNo}{t.groupLabel?` (${t.groupLabel.split("-").pop()})`:""}</td>
+                              <td><span className="badge badge-blue" style={{ fontSize:"9px" }}>{t.purity}</span></td>
+                              <td style={{ fontSize:"11px" }}>{t.toDept}</td>
+                              <td className="num weight-text">{fmtW(t.issuedWeight)}</td>
+                              <td style={{ fontSize:"10px", color:"var(--text-dim)" }}>{fmtD(t.timestamp||t.date)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))
+              }
+            </div>
+          );
+        })()}
+
+        {/* ════ KARIGAR / PM METAL BALANCE — WITH PM ════ */}
+        {report==="karigarbal" && subView==="withpm" && (()=>{
+          // PM Book ledger balance per purity/metal, vs the physical bags/groups
+          // currently with PM (at Production Manager, or pending re-issue) — same
+          // logic as the PM Book "Reconcile" check, but always visible with a
+          // bag-level drill-down of what makes up "physical with PM".
+          const pmBalance = {};
+          (db.pmBook||[]).forEach(e=>{
+            if(filterPurity && e.purity!==filterPurity) return;
+            if(filterMetal  && e.metalType!==filterMetal) return;
+            const key = `${e.purity}||${e.metalType||"Gold"}`;
+            if(!pmBalance[key]) pmBalance[key]={ purity:e.purity, metalType:e.metalType||"Gold", ledger:0 };
+            if(e.direction==="IN")  pmBalance[key].ledger += e.weight||0;
+            if(e.direction==="OUT") pmBalance[key].ledger -= e.weight||0;
+          });
+          const physicalBags = (db.bags||[]).filter(b=>b.status==="In Process" && !b.isBroken && (b.currentDept===PROD_MGR || b.pendingIssue)
+            && (!filterPurity || b.purity===filterPurity) && (!filterMetal || b.metalType===filterMetal));
+          const physicalGroups = (db.groups||[]).filter(g=>g.status==="In Process" && g.currentDept===PROD_MGR);
+          const byKey = {};
+          physicalBags.forEach(b=>{
+            const key = `${b.purity}||${b.metalType||"Gold"}`;
+            if(!byKey[key]) byKey[key] = { purity:b.purity, metalType:b.metalType||"Gold", physical:0, items:[] };
+            const wt = round3(b.netMetalWeight||b.currentWeight||0);
+            byKey[key].physical += wt;
+            byKey[key].items.push({ label:b.id, weight:wt });
+          });
+          physicalGroups.forEach(g=>{
+            const bag = (db.bags||[]).find(x=>x.id===g.bagId);
+            if(!bag) return;
+            if(filterPurity && bag.purity!==filterPurity) return;
+            if(filterMetal  && bag.metalType!==filterMetal) return;
+            const key = `${bag.purity}||${bag.metalType||"Gold"}`;
+            if(!byKey[key]) byKey[key] = { purity:bag.purity, metalType:bag.metalType||"Gold", physical:0, items:[] };
+            const wt = round3(g.currentWeight||0);
+            byKey[key].physical += wt;
+            byKey[key].items.push({ label:`${g.bagId} (${g.label.split("-").pop()})`, weight:wt });
+          });
+          const allKeys = new Set([...Object.keys(pmBalance), ...Object.keys(byKey)]);
+          const rows = [...allKeys].map(key=>{
+            const meta = pmBalance[key] || byKey[key];
+            const ledger = round3(pmBalance[key]?.ledger || 0);
+            const physical = round3(byKey[key]?.physical || 0);
+            return { purity:meta.purity, metalType:meta.metalType, ledger, physical, diff:round3(ledger-physical), items:byKey[key]?.items||[] };
+          }).sort((a,b)=>a.purity.localeCompare(b.purity));
+          return (
+            <div className="card card-gold">
+              <div className="section-title"><span className="section-title-accent"></span>Metal Currently With PM</div>
+              <div style={{ fontSize:"11px", color:"var(--text-dim)", marginBottom:"12px", lineHeight:"1.8" }}>
+                "PM Book Ledger" is the running balance from PM Book IN/OUT entries. "Physical (Bags with PM)" is
+                computed from bags/groups currently at Production Manager or pending re-issue. They should match —
+                a difference means either a missing PM Book entry, or metal that's been credited back (e.g. via
+                Extra Metal / Loose Metal returns) but the corresponding bag hasn't moved.
+              </div>
+              {rows.length===0
+                ? <div style={{ color:"var(--text-dim)", fontSize:"11px", padding:"12px 0" }}>No PM Book or bag data{filterPurity||filterMetal?" matching these filters":""}.</div>
+                : rows.map(r=>(
+                    <div key={r.purity+r.metalType} style={{ marginBottom:"14px", padding:"10px 12px", background:"var(--dark3)", borderRadius:"4px", border:"1px solid var(--dark4)" }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"8px" }}>
+                        <span className="badge badge-blue">{r.purity} {r.metalType}</span>
+                        <div style={{ fontSize:"11px", display:"flex", gap:"16px" }}>
+                          <span>PM Book Ledger: <strong style={{ color:"var(--gold-light)" }}>{fmtW(r.ledger)}</strong></span>
+                          <span>Physical (Bags with PM): <strong style={{ color:"var(--gold-light)" }}>{fmtW(r.physical)}</strong></span>
+                          <span>Diff: <strong style={{ color:Math.abs(r.diff)<=0.001?"#4db88a":"#d46060" }}>{Math.abs(r.diff)<=0.001?"✓ 0.000g":fmtW(r.diff)}</strong></span>
+                        </div>
+                      </div>
+                      {r.items.length>0 && (
+                        <table>
+                          <thead><tr><th>Bag / Group</th><th className="num">Weight (g)</th></tr></thead>
+                          <tbody>
+                            {r.items.sort((a,b)=>b.weight-a.weight).map((it,i)=>(
+                              <tr key={i}>
+                                <td style={{ color:"var(--gold)", fontFamily:"'Courier New',monospace" }}>{it.label}</td>
+                                <td className="num weight-text">{fmtW(it.weight)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  ))
+              }
+            </div>
+          );
+        })()}
+
+        {/* ════ KARIGAR / PM METAL BALANCE — LOSS HISTORY ════ */}
+        {report==="karigarbal" && subView==="losshistory" && (()=>{
+          // Cumulative loss ("Machine Dust") attributed per karigar per purity, over the
+          // selected date range — for spotting karigars with consistently high loss%
+          // (a possible sign that small shreds/wires are staying with them rather than
+          // returning to PM or going into the machine).
+          const closedTxs = filteredTxs.filter(t=>t.receivedWeight!=null && t.karigarId);
+          const byKarigar = {};
+          closedTxs.forEach(t=>{
+            const k = db.karigars.find(x=>x.id===t.karigarId);
+            const kName = k?.name || "Unknown";
+            const pKey = `${t.purity}||${t.metalType||"Gold"}`;
+            if(!byKarigar[t.karigarId]) byKarigar[t.karigarId] = { name:kName, byPurity:{} };
+            if(!byKarigar[t.karigarId].byPurity[pKey]) byKarigar[t.karigarId].byPurity[pKey] = { purity:t.purity, metalType:t.metalType||"Gold", issued:0, received:0, returned:0, loss:0 };
+            const p = byKarigar[t.karigarId].byPurity[pKey];
+            p.issued   += t.issuedWeight||0;
+            p.received += t.receivedWeight||0;
+            p.returned += (t.recoveryWeight||0) + (t.looseMetalWeight||0);
+            p.loss     += t.lossWeight||0;
+          });
+          const rows = [];
+          Object.values(byKarigar).forEach(k=>{
+            Object.values(k.byPurity).forEach(p=>{
+              rows.push({ name:k.name, ...p });
+            });
+          });
+          rows.sort((a,b)=>b.loss-a.loss);
+          return (
+            <div className="card card-gold">
+              <div className="section-title"><span className="section-title-accent"></span>Loss ("Machine Dust") Attributed Per Karigar</div>
+              <div style={{ fontSize:"11px", color:"var(--text-dim)", marginBottom:"12px", lineHeight:"1.8" }}>
+                "Returned (Extra/Loose)" is metal the karigar handed back separately from the piece itself —
+                both reduce "Loss" already. Loss % consistently higher for one karigar than others on the same
+                purity/category is the practical signal that small shreds/wires may be staying with that karigar
+                rather than going into the machine or coming back to PM.
+              </div>
+              {rows.length===0
+                ? <div style={{ color:"var(--text-dim)", fontSize:"11px", padding:"12px 0" }}>No completed receipts in this date range{filterKarigar||filterPurity||filterMetal?" matching these filters":""}.</div>
+                : <table>
+                    <thead><tr><th>Karigar</th><th>Purity</th><th className="num">Issued (g)</th><th className="num">Received (g)</th><th className="num">Returned Extra/Loose (g)</th><th className="num">Loss (g)</th><th className="num">Loss %</th></tr></thead>
+                    <tbody>
+                      {rows.map((r,i)=>(
+                        <tr key={i}>
+                          <td style={{ color:"var(--gold)" }}>{r.name}</td>
+                          <td><span className="badge badge-blue" style={{ fontSize:"9px" }}>{r.purity} {r.metalType}</span></td>
+                          <td className="num weight-text">{fmtW(r.issued)}</td>
+                          <td className="num">{fmtW(r.received)}</td>
+                          <td className="num recovery-text">{r.returned>0?fmtW(r.returned):"—"}</td>
+                          <td className="num loss-text">{fmtW(r.loss)}</td>
+                          <td className="num"><span style={{ color:r.issued>0&&(r.loss/r.issued)>0.03?"var(--loss)":"var(--recovery)" }}>{r.issued>0?((r.loss/r.issued)*100).toFixed(2):0}%</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+              }
             </div>
           );
         })()}
