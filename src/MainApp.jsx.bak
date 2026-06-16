@@ -387,7 +387,7 @@ function initDB() {
 // ============================================================
 // SCHEMA MIGRATION — runs on every load, safe (only adds fields)
 // ============================================================
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 4;
 
 function migrateDB(db) {
   const v = db.schemaVersion || 1;
@@ -437,7 +437,70 @@ function migrateDB(db) {
     logs.push(`Schema migrated v1→v2: alerts, messages, bag flags, receipt photos`);
   }
 
-  // Write migration logs to auditLogs
+  // ── v2 → v3: remove duplicate Alloyed Stock credits ──────────
+  // Until this fix, "Deliver to CO" (PM Book) AND "Receive Jewellery"/"Receive Metal"
+  // (Central Office) BOTH credited coAlloyedStock for the same physical hand-off —
+  // every completed bag (and every loose/extra-metal return) was counted TWICE in
+  // Alloyed Metal Stock. Going forward only the CO-receive side credits stock
+  // (BAG_RETURN for bags, PM_DELIVERY_RECV via Receive Metal for loose returns).
+  // This one-time cleanup removes the specific historical entries that were created
+  // by the old "Deliver to CO" code path (identified by their source text starting
+  // with "PM Book —" and type PM_DELIVERY_RECV).
+  if (v < 3) {
+    const before = migrated.coAlloyedStock || [];
+    const removed = before.filter(e => e.type==="PM_DELIVERY_RECV" && typeof e.source==="string" && e.source.startsWith("PM Book"));
+    if (removed.length > 0) {
+      migrated.coAlloyedStock = before.filter(e => !(e.type==="PM_DELIVERY_RECV" && typeof e.source==="string" && e.source.startsWith("PM Book")));
+      const byKey = {};
+      removed.forEach(e=>{
+        const k = `${e.metalType||"Gold"} ${e.purity||""}`;
+        byKey[k] = (byKey[k]||0) + (e.weight||0);
+      });
+      const summary = Object.entries(byKey).map(([k,w])=>`${w.toFixed(3)}g ${k}`).join(", ");
+      logs.push(`Schema migrated v2→v3: removed ${removed.length} duplicate Alloyed Stock credit entries (double-counted from "Deliver to CO" + "Receive Jewellery/Metal") — total ${summary}. Bag-level metal/jewellery records are unaffected.`);
+    }
+    migrated.schemaVersion = 3;
+  }
+
+  // ── v3 → v4: small follow-up corrections from PM Book review ──
+  if (v < 4) {
+    // (1) BGS-CH1 was marked Completed & received by CO at 42.072g (19 May), then
+    //    sent back for rework (Final Polishing again on 9 June) and finished at
+    //    41.722g — a real 0.350g reduction that was never re-received by CO.
+    //    Correct Alloyed Stock (Silver 925) down by 0.350g to match the piece's
+    //    actual final weight.
+    const ch1ReworkLoss = 0.350;
+    if (!migrated.coAlloyedStock) migrated.coAlloyedStock = [];
+    migrated.coAlloyedStock.push({
+      id: generateId(), type:"MANUAL_ADJUST", direction:"OUT",
+      metalType:"Silver", purity:"Silver 925",
+      weight: ch1ReworkLoss, pureEquiv: toPureMetal(ch1ReworkLoss, "Silver 925"),
+      bagNo:"BGS-CH1",
+      source:"Rework Adjustment",
+      date: now(),
+      notes:`Bag BGS-CH1 was received by CO at 42.072g, then sent back for rework (Final Polishing) and finished at 41.722g. Adjusting Alloyed Stock down by ${ch1ReworkLoss.toFixed(3)}g to match the piece's actual final weight.`,
+    });
+
+    // (2) BGS-N6 and BGS-P1 each have one redundant, self-cancelling
+    //    COMPLETED_BAG(IN)/DELIVERED_TO_CO(OUT) pair in pmBook (same weight,
+    //    caused by QC Pass / Deliver to CO running twice for the same bag).
+    //    These nettted to zero so PM Book's balance was never affected — this
+    //    just removes the duplicate audit-trail rows for tidiness.
+    const redundantPmBookIds = new Set([
+      "QI8ZQLB14", "B2RE7BZT6", // BGS-N6 — second QC Pass / Deliver pair
+      "OFGAGJJYQ", "T83LTB5O0", // BGS-P1 — second QC Pass / Deliver pair
+    ]);
+    const pmBefore = migrated.pmBook || [];
+    const pmRemoved = pmBefore.filter(e=>redundantPmBookIds.has(e.id));
+    if (pmRemoved.length > 0) {
+      migrated.pmBook = pmBefore.filter(e=>!redundantPmBookIds.has(e.id));
+    }
+
+    logs.push(`Schema migrated v3→v4: (1) corrected Silver 925 Alloyed Stock by -${ch1ReworkLoss.toFixed(3)}g for Bag BGS-CH1's post-completion rework (finished at 41.722g vs 42.072g originally received); (2) removed ${pmRemoved.length} redundant self-cancelling PM Book entries for Bag BGS-N6 and Bag BGS-P1 (each had a duplicate QC Pass/Deliver-to-CO pair at the same weight — no effect on PM Book balance, just tidy-up).`);
+    migrated.schemaVersion = 4;
+  }
+
+
   if (logs.length > 0) {
     migrated.auditLogs = [
       ...(migrated.auditLogs||[]),
@@ -1833,7 +1896,7 @@ function GroupedBar({ data, keys, colors, height=120 }) {
   const groupGap = 6;
   const groupW = keys.length * barW + (keys.length-1)*2 + groupGap;
   const totalW = data.length * groupW;
-  const scaleH = height - 20;
+  const scaleH = height;
   return (
     <svg width="100%" height={height} viewBox={`0 0 ${totalW} ${height}`} preserveAspectRatio="none">
       {data.map((d,gi) => {
@@ -1846,10 +1909,6 @@ function GroupedBar({ data, keys, colors, height=120 }) {
               const by = scaleH - bh;
               return <rect key={ki} x={bx} y={by} width={barW} height={bh} fill={colors[ki]} rx="1" fillOpacity="0.85"/>;
             })}
-            <text x={gx + (keys.length*(barW+2))/2 - barW/2} y={height-4} textAnchor="middle"
-              fontSize="6" fill="var(--text-dim)" fontFamily="'Courier New',monospace">
-              {d.label?.slice(0,3)}
-            </text>
           </g>
         );
       })}
@@ -2226,6 +2285,34 @@ function Dashboard({ db, onBagClick }) {
   const silverStock = allStock.filter(e=>e.metalType==="Silver")
     .reduce((s,e)=>s+(["PURCHASE","REFINING","CUSTOMER_ISSUE","RETURN_FROM_PM"].includes(e.type)?1:-1)*(e.pureWeight||0),0);
 
+  // ── Alloyed Metal Stock — current balance per metal/purity (all-time) ────
+  const PURITY_ORDER = ["24K","22K","18K","14K","9K","Silver 999","Silver 925","Silver 800"];
+  const alloyedBalance = {};
+  (db.coAlloyedStock||[]).forEach(e=>{
+    const key = (e.metalType||"Gold")+"||"+(e.purity||"");
+    if(!alloyedBalance[key]) alloyedBalance[key] = { metalType:e.metalType||"Gold", purity:e.purity||"", balance:0 };
+    const wt = e.weight||0;
+    alloyedBalance[key].balance += (e.direction==="IN" ? wt : -wt);
+  });
+  const alloyedRows = Object.values(alloyedBalance)
+    .map(r=>({ ...r, balance: Math.round(r.balance*1000)/1000 }))
+    .filter(r=>Math.abs(r.balance)>0.001)
+    .sort((a,b)=>PURITY_ORDER.indexOf(a.purity)-PURITY_ORDER.indexOf(b.purity));
+  const goldAlloyed   = alloyedRows.filter(r=>r.metalType==="Gold");
+  const silverAlloyed = alloyedRows.filter(r=>r.metalType==="Silver");
+
+  // ── Ready Jewellery Stock — available pieces & weight, by metal ───────────
+  const readyTotals = { Gold:{ pieces:0, weight:0 }, Silver:{ pieces:0, weight:0 } };
+  (db.readyStock||[]).forEach(item=>{
+    const availUnits = (item.units||[]).filter(u=>!u.soldAt).length;
+    if(availUnits<=0) return;
+    const totalUnits = item.unitCount || (item.units||[]).length || 1;
+    const wtPerUnit  = (item.netMetalWeight||0) / totalUnits;
+    const bucket = readyTotals[item.metalType] || (readyTotals[item.metalType] = { pieces:0, weight:0 });
+    bucket.pieces += availUnits;
+    bucket.weight += wtPerUnit * availUnits;
+  });
+
   // Metal issued in period
   const periodTx     = allTx.filter(t=>inPeriod(t.timestamp));
   const goldIssued   = periodTx.filter(t=>t.metalType==="Gold").reduce((s,t)=>s+(t.issuedWeight||0),0);
@@ -2362,12 +2449,22 @@ function Dashboard({ db, onBagClick }) {
       )}
 
       {/* ── KPI strip ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:"10px", marginBottom:"20px" }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:"10px", marginBottom:"10px" }}>
         {[
           { label:"Active Orders",   value:activeBags.length,          sub:"in production",     color:"var(--gold)",     accent:"var(--gold)" },
           { label:"Completed",       value:completedBags.length,        sub:"this FY",           color:"#4db88a",         accent:"#4db88a" },
           { label:"Gold Stock",      value:goldStock.toFixed(2)+"g",    sub:"pure gold balance", color:"var(--gold)",     accent:"var(--gold)" },
           { label:"Silver Stock",    value:silverStock.toFixed(2)+"g",  sub:"pure silver bal.",  color:"var(--silver)",   accent:"var(--silver)" },
+        ].map((k,i)=>(
+          <div key={i} style={{ ...card, borderTop:`2px solid ${k.accent}`, padding:"12px 14px" }}>
+            <div style={{ fontSize:"9px", color:"var(--text-dim)", letterSpacing:"1.5px", textTransform:"uppercase", marginBottom:"6px" }}>{k.label}</div>
+            <div style={{ fontSize:"20px", color:k.color, fontFamily:"'Courier New',monospace", fontWeight:"bold", lineHeight:1 }}>{k.value}</div>
+            <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"4px" }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:"10px", marginBottom:"20px" }}>
+        {[
           { label:"Metal Loss",      value:lossRate+"%",                sub:`${totalLoss.toFixed(2)}g in period`, color:parseFloat(lossRate)>3?"var(--loss)":"#4db88a", accent:parseFloat(lossRate)>3?"var(--loss)":"#4db88a" },
           { label:"Overdue",         value:delayed.length,              sub:"past target date",  color:delayed.length>0?"var(--loss)":"var(--text-dim)", accent:delayed.length>0?"var(--loss)":"var(--dark4)" },
         ].map((k,i)=>(
@@ -2377,6 +2474,46 @@ function Dashboard({ db, onBagClick }) {
             <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"4px" }}>{k.sub}</div>
           </div>
         ))}
+
+        {/* Alloyed Metal Stock — Gold & Silver, by purity */}
+        <div style={{ ...card, borderTop:"2px solid #b07fd4", padding:"12px 14px" }}>
+          <div style={{ fontSize:"9px", color:"var(--text-dim)", letterSpacing:"1.5px", textTransform:"uppercase", marginBottom:"8px" }}>Alloyed Metal Stock</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:"6px" }}>
+            <div style={{ display:"flex", alignItems:"baseline", gap:"8px" }}>
+              <span style={{ fontSize:"10px", color:"var(--gold)", fontWeight:"bold", flexShrink:0, width:"20px" }}>Au</span>
+              <span style={{ fontSize:"13px", color:"var(--gold)", fontFamily:"'Courier New',monospace", fontWeight:"bold", lineHeight:1.3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                {goldAlloyed.length>0 ? goldAlloyed.map(r=>`${r.purity} ${r.balance.toFixed(2)}g`).join("  ·  ") : "— 0.00g"}
+              </span>
+            </div>
+            <div style={{ display:"flex", alignItems:"baseline", gap:"8px" }}>
+              <span style={{ fontSize:"10px", color:"var(--silver)", fontWeight:"bold", flexShrink:0, width:"20px" }}>Ag</span>
+              <span style={{ fontSize:"13px", color:"var(--silver)", fontFamily:"'Courier New',monospace", fontWeight:"bold", lineHeight:1.3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                {silverAlloyed.length>0 ? silverAlloyed.map(r=>`${r.purity} ${r.balance.toFixed(2)}g`).join("  ·  ") : "— 0.00g"}
+              </span>
+            </div>
+          </div>
+          <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"6px" }}>in alloyed register</div>
+        </div>
+
+        {/* Ready Jewellery Stock — Gold & Silver, pieces + weight */}
+        <div style={{ ...card, borderTop:"2px solid #5090c8", padding:"12px 14px" }}>
+          <div style={{ fontSize:"9px", color:"var(--text-dim)", letterSpacing:"1.5px", textTransform:"uppercase", marginBottom:"8px" }}>Ready Jewellery Stock</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:"6px" }}>
+            <div style={{ display:"flex", alignItems:"baseline", gap:"8px" }}>
+              <span style={{ fontSize:"10px", color:"var(--gold)", fontWeight:"bold", flexShrink:0, width:"20px" }}>Au</span>
+              <span style={{ fontSize:"13px", color:"var(--gold)", fontFamily:"'Courier New',monospace", fontWeight:"bold", lineHeight:1.3 }}>
+                {readyTotals.Gold.pieces} pcs · {readyTotals.Gold.weight.toFixed(2)}g
+              </span>
+            </div>
+            <div style={{ display:"flex", alignItems:"baseline", gap:"8px" }}>
+              <span style={{ fontSize:"10px", color:"var(--silver)", fontWeight:"bold", flexShrink:0, width:"20px" }}>Ag</span>
+              <span style={{ fontSize:"13px", color:"var(--silver)", fontFamily:"'Courier New',monospace", fontWeight:"bold", lineHeight:1.3 }}>
+                {readyTotals.Silver.pieces} pcs · {readyTotals.Silver.weight.toFixed(2)}g
+              </span>
+            </div>
+          </div>
+          <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"6px" }}>available for sale</div>
+        </div>
       </div>
 
       {/* ── Row 1: Bags Trend + Status Donut + Category breakdown ── */}
@@ -2449,9 +2586,9 @@ function Dashboard({ db, onBagClick }) {
             </div>
           </div>
           <GroupedBar data={metalTrendData} keys={["gold","silver"]} colors={["var(--gold)","var(--silver)"]} height={100}/>
-          <div style={{ display:"flex", justifyContent:"space-around", marginTop:"6px" }}>
+          <div style={{ display:"flex", justifyContent:"space-around", marginTop:"10px" }}>
             {metalTrendData.map((d,i)=>(
-              <span key={i} style={{ fontSize:"9px", color:"var(--text-dim)", fontFamily:"'Courier New',monospace" }}>{d.label}</span>
+              <span key={i} style={{ fontSize:"11px", color:"var(--text-dim)", fontFamily:"'Courier New',monospace", letterSpacing:"1px" }}>{d.label}</span>
             ))}
           </div>
           <div style={{ display:"flex", gap:"20px", marginTop:"10px", paddingTop:"10px", borderTop:"1px solid var(--dark4)", fontSize:"11px" }}>
@@ -2530,13 +2667,22 @@ function Dashboard({ db, onBagClick }) {
           {delayed.length>0 && (
             <div style={{ ...card, borderColor:"rgba(212,88,88,0.4)", background:"rgba(212,88,88,0.05)" }}>
               <div style={{ ...cardTitle, color:"var(--loss)" }}>⚠ Overdue Orders ({delayed.length})</div>
-              {delayed.slice(0,4).map(b=>(
-                <div key={b.id} style={{ display:"flex", justifyContent:"space-between", fontSize:"11px", marginBottom:"5px" }}>
-                  <span style={{ color:"var(--gold)", fontFamily:"'Courier New',monospace" }}>{b.id}</span>{b.designId&&<span style={{ color:"var(--gold-dim)", fontSize:"10px", marginLeft:"5px" }}>{b.designId}</span>}
-                  <span style={{ color:"var(--loss)", fontSize:"10px" }}>Due {new Date(b.targetDate).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</span>
-                </div>
-              ))}
-              {delayed.length>4 && <div style={{ fontSize:"10px", color:"var(--text-dim)", marginTop:"4px" }}>+{delayed.length-4} more overdue</div>}
+              <div style={{ maxHeight:"168px", overflowY:"auto", paddingRight:"4px" }}>
+                {delayed.map(b=>(
+                  <div key={b.id}
+                    onClick={()=>onBagClick && onBagClick(b.id)}
+                    style={{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:"11px", marginBottom:"5px", cursor:"pointer", borderRadius:"2px", padding:"1px 2px" }}
+                    onMouseEnter={e=>e.currentTarget.style.background="rgba(212,88,88,0.12)"}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+                    title={`Open ${b.id} in Bags`}>
+                    <span>
+                      <span style={{ color:"var(--gold)", fontFamily:"'Courier New',monospace", textDecoration:"underline", textDecorationColor:"rgba(212,168,67,0.35)" }}>{b.id}</span>
+                      {b.designId&&<span style={{ color:"var(--gold-dim)", fontSize:"10px", marginLeft:"5px" }}>{b.designId}</span>}
+                    </span>
+                    <span style={{ color:"var(--loss)", fontSize:"10px", flexShrink:0, marginLeft:"8px" }}>Due {new Date(b.targetDate).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -2771,12 +2917,20 @@ function PMBookView({ db, updateDB, user }) {
   const handleDeliverToCO = (itemId) => {
     const item = (db.pmBook||[]).find(e=>e.id===itemId);
     if(!item) return;
-    if(!window.confirm(`Deliver to CO?\n\n${item.type.replace(/_/g," ")} — Bag ${item.bagNo||"N/A"}\n${fmtW(item.weight)} ${item.purity} ${item.metalType}\n\nThis will allow CO to officially receive it.`)) return;
+    // Guard against double-click / re-submission — if already delivered, do nothing
+    if(item.status==="Delivered to CO") {
+      window.alert(`Already delivered to CO — ${item.type.replace(/_/g," ")} ${item.bagNo?`Bag ${item.bagNo}`:""} (${fmtW(item.weight)} ${item.purity} ${item.metalType}).\n\nNo action taken.`);
+      return;
+    }
+    if(!window.confirm(`Deliver to CO?\n\n${item.type.replace(/_/g," ")} — Bag ${item.bagNo||"N/A"}\n${fmtW(item.weight)} ${item.purity} ${item.metalType}\n\nThis marks the hand-off to CO. CO will add it to Alloyed Stock when they formally receive it (Receive Jewellery / Receive Metal).`)) return;
 
     updateDB(prev=>{
       // Mark this pmBook entry as delivered
       const entry = prev.pmBook.find(e=>e.id===itemId);
-      if(entry) entry.status = "Delivered to CO";
+      if(!entry) return prev;
+      // Re-check inside updateDB in case of rapid double-click before state propagated
+      if(entry.status==="Delivered to CO") return prev;
+      entry.status = "Delivered to CO";
 
       // Create PM Metal Delivery record for LOOSE_RETURN and RECALL only
       // COMPLETED_BAG is received via Receive Jewellery — NOT Receive Metal
@@ -2819,19 +2973,12 @@ function PMBookView({ db, updateDB, user }) {
         }
       }
 
-      // Credit coAlloyedStock — for ALL types of PM delivery (loose returns, recalls, AND completed bags)
-      // COMPLETED_BAG: the bag's net metal comes back as alloyed stock (was debited on BAG_ISSUE)
-      // LOOSE_RETURN / RECALL: free metal handed to CO
-      if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
-      prev.coAlloyedStock.push({
-        id:generateId(), type:"PM_DELIVERY_RECV", direction:"IN",
-        metalType:item.metalType, purity:item.purity,
-        weight:item.weight||0, pureEquiv:item.pureEquiv||toPureMetal(item.weight||0,item.purity),
-        bagNo:item.bagNo||null,
-        source:`PM Book — ${item.type.replace(/_/g," ")}${item.bagNo?` (Bag ${item.bagNo})`:""}`,
-        date:now(),
-        notes:`PM delivered ${fmtW(item.weight)} ${item.purity} ${item.metalType} to CO — ${item.type.replace(/_/g," ")}`,
-      });
+      // NOTE: coAlloyedStock is NOT credited here. "Deliver to CO" only marks the
+      // PM→CO hand-off (pmBook debit below). The Alloyed Metal credit happens once,
+      // when CO formally receives it — via "Receive Jewellery" (BAG_RETURN, for
+      // COMPLETED_BAG) or "Receive Metal" (PM_DELIVERY_RECV, for LOOSE_RETURN/RECALL/
+      // EXTRA_METAL_RECOVERED — see handleReceiveMetal). Crediting it here too caused
+      // every completed bag's metal to be counted twice in Alloyed Metal Stock.
 
       // Add OUT entry to pmBook
       prev.pmBook.push({
@@ -2851,6 +2998,7 @@ function PMBookView({ db, updateDB, user }) {
     });
   };
 
+
   // ── Deliver all ready items of one purity at once ──
   const handleDeliverAll = (purity, metalType) => {
     const items = readyItems.filter(e=>e.purity===purity&&e.metalType===metalType);
@@ -2865,21 +3013,17 @@ function PMBookView({ db, updateDB, user }) {
       let totalPure = 0;
       items.forEach(item=>{
         const entry = prev.pmBook.find(e=>e.id===item.id);
-        if(entry) entry.status="Delivered to CO";
+        if(!entry) return;
+        // Guard against double-click / re-submission — skip items already delivered
+        if(entry.status==="Delivered to CO") return;
+        entry.status="Delivered to CO";
         if(item.type==="COMPLETED_BAG"&&item.bagNo){
           const bag = prev.bags.find(b=>b.id===item.bagNo);
           if(bag) bag.pmBookDeliveredToCO=true;
         }
-        if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
-        // Credit coAlloyedStock for ALL delivery types (bags, loose returns, recalls)
-        prev.coAlloyedStock.push({
-          id:generateId(), type:"PM_DELIVERY_RECV", direction:"IN",
-          metalType:item.metalType, purity:item.purity,
-          weight:item.weight||0, pureEquiv:item.pureEquiv||0,
-          bagNo:item.bagNo||null,
-          source:`PM Book — ${item.type}${item.bagNo?` (${item.bagNo})`:""}`,
-          date:now(), notes:`PM delivered ${fmtW(item.weight)} ${item.purity} ${item.metalType} to CO — ${item.type}`,
-        });
+        // NOTE: coAlloyedStock is NOT credited here — see handleDeliverToCO for why.
+        // The Alloyed Metal credit happens once, when CO formally receives it via
+        // "Receive Jewellery" (BAG_RETURN) or "Receive Metal" (PM_DELIVERY_RECV).
         prev.pmBook.push({
           id:generateId(), type:"DELIVERED_TO_CO", direction:"OUT",
           bagNo:item.bagNo||null, purity:item.purity, metalType:item.metalType,
@@ -2889,6 +3033,7 @@ function PMBookView({ db, updateDB, user }) {
         });
         totalPure += item.pureEquiv||0;
       });
+
 
       // One consolidated PM delivery record — only for loose returns/recalls, NOT completed bags
       const nonBagItems = items.filter(item=>item.type!=="COMPLETED_BAG");
@@ -3590,7 +3735,7 @@ function PMBookView({ db, updateDB, user }) {
 // ============================================================
 // CENTRAL OFFICE VIEW
 // ============================================================
-function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) {
+function CentralOfficeView({ db, updateDB, setModal, user, dateRange, onShowDigest }) {
   const [coTab, setCoTab] = useState("production");
   const [historySearch, setHistorySearch] = useState("");
   const [historyFilter, setHistoryFilter] = useState("all");
@@ -3605,6 +3750,8 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
   // Stone ledger state — must be at component level (not inside IIFE) per React hooks rules
   const [showAddStone, setShowAddStone] = useState(false);
   const [stoneForm, setStoneForm]       = useState({ stoneType:"Diamond", pieces:"", carats:"", source:"", date:"", notes:"" });
+  // Demand approval — per-demand editable approved quantity + CO note
+  const [demandForms, setDemandForms] = useState({}); // { [demandId]: { qty, note } }
 
   const handleAddStoneStock = () => {
     if(!stoneForm.stoneType) return alert("Select stone type");
@@ -3632,6 +3779,156 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
     setShowAddStone(false);
   };
   const { from:acctFrom, to:acctTo, inRange:inAcctFY, setRange:setAcctRange } = dateRange;
+
+  // ── Demand approval — CO/Admin approves or rejects PM/other-role requests ──
+  const handleApproveDemand = (demandId) => {
+    const demand = (db.demands||[]).find(d=>d.id===demandId);
+    if(!demand) return;
+    const f = demandForms[demandId] || {};
+    const approvedQty = f.qty!=null && f.qty!=="" ? parseFloat(f.qty) : demand.quantityRequested;
+    if(!approvedQty || approvedQty<=0) return alert("Enter a valid approved quantity");
+    if(!window.confirm(`Approve ${demand.demandType==="NEW_BAG"?"new bag":"extra metal"} request — Bag ${demand.bagNo} — ${fmtW(approvedQty)} ${demand.purity} ${demand.metalType}?\n\nRequested by: ${demand.raisedBy}\nRequested: ${fmtW(demand.quantityRequested)}\n\nThis will issue the metal now.`)) return;
+
+    updateDB(prev=>{
+      const d = (prev.demands||[]).find(x=>x.id===demandId);
+      if(!d || d.status!=="PENDING") return prev;
+      let pmBookEntryId = null;
+
+      if(demand.demandType==="NEW_BAG") {
+        const bag = prev.bags.find(b=>b.id===demand.bagId);
+        if(!bag) return prev;
+        const pureEquiv = toPureMetal(approvedQty, demand.purity);
+        bag.issuedWeight  = round3(approvedQty);
+        bag.currentWeight = round3(approvedQty);
+        bag.status = "In Process";
+        bag.pendingIssue = true;
+        prev.transactions.push({
+          id:generateId(), type:"INITIAL_ISSUE", bagNo:bag.id, groupLabel:null,
+          fromDept:CENTRAL_OFFICE, toDept:PROD_MGR,
+          issuedWeight:approvedQty, receivedWeight:null, lossWeight:null, recoveryWeight:0,
+          purity:demand.purity, metalType:demand.metalType, karigarId:null, timestamp:now(),
+          notes:`Bag created — metal approved by CO/Admin (requested by ${demand.raisedBy})`
+        });
+        if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
+        prev.coAlloyedStock.push({
+          id:generateId(), type:"BAG_ISSUE", direction:"OUT",
+          metalType:demand.metalType, purity:demand.purity,
+          weight:approvedQty, pureEquiv:pureEquiv,
+          bagNo:bag.id, source:`Bag ${bag.id} issued to PM`, date:now(),
+          notes:`${fmtW(approvedQty)} ${demand.purity} ${demand.metalType} issued to PM for bag ${bag.id} — approved by CO/Admin`,
+        });
+        if(!prev.pmLedger) prev.pmLedger=[];
+        prev.pmLedger.push({
+          id:generateId(), type:"RECEIVED_FROM_CO",
+          bagNo:bag.id, purity:demand.purity, metalType:demand.metalType,
+          alloiedWeight:approvedQty, pureWeight:pureEquiv,
+          date:now(), notes:`Received from Central Office for bag ${bag.id}`,
+          reconciled:false,
+        });
+        if(!prev.pmBook) prev.pmBook=[];
+        const pmEntry = {
+          id:generateId(), type:"BAG_RECEIVED_FROM_CO", direction:"IN",
+          bagNo:bag.id, purity:demand.purity, metalType:demand.metalType,
+          weight:approvedQty, pureEquiv,
+          date:now(),
+          notes:`Bag ${bag.id} issued from CO — ${fmtW(approvedQty)} ${demand.purity} ${demand.metalType} — approved by CO/Admin`,
+        };
+        prev.pmBook.push(pmEntry);
+        pmBookEntryId = pmEntry.id;
+        prev.auditLogs.push({ id:generateId(), action:"BAG_CREATED", entityId:bag.id, details:`${bag.id} — metal request approved (${fmtW(approvedQty)} ${demand.purity} ${demand.metalType})`, timestamp:now() });
+      } else if(demand.demandType==="EXTRA_METAL") {
+        const bagId = demand.bagId;
+        const bagObj2 = prev.bags.find(b=>b.id===bagId);
+        if(!bagObj2) return prev;
+        const pureEquiv = toPureMetal(approvedQty, demand.purity);
+        if(!prev.extraMetalIssues) prev.extraMetalIssues=[];
+        prev.extraMetalIssues.push({
+          id: generateId(), bagId, groupLabel: demand.groupLabel||null,
+          karigarId: demand.karigarId, weight: approvedQty,
+          purity: demand.purity, metalType: demand.metalType,
+          reason: demand.note||"Repair / Welding / Soldering", date: now(),
+        });
+        // Bump the open leg's issuedWeight, same as direct extra-metal issuance
+        const openTxs = prev.transactions
+          .map((t,i)=>({t,i}))
+          .filter(({t})=>
+            t.bagNo===bagId &&
+            (demand.groupLabel ? t.groupLabel===demand.groupLabel : !t.groupLabel) &&
+            t.receivedWeight==null &&
+            (t.type==="TRANSFER" || t.type==="BREAK_ISSUE")
+          );
+        if(openTxs.length>0){
+          const last = openTxs[openTxs.length-1];
+          prev.transactions[last.i].issuedWeight = (prev.transactions[last.i].issuedWeight||0) + approvedQty;
+        }
+        if(demand.groupLabel) {
+          const grpIdx = (prev.groups||[]).findIndex(g=>g.bagId===bagId && g.label===demand.groupLabel);
+          if(grpIdx>=0) prev.groups[grpIdx].currentWeight = round3((prev.groups[grpIdx].currentWeight||0) + approvedQty);
+        }
+        if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
+        prev.coAlloyedStock.push({
+          id:generateId(), type:"EXTRA_METAL", direction:"OUT",
+          metalType:demand.metalType, purity:demand.purity,
+          weight:approvedQty, pureEquiv,
+          bagNo:bagId,
+          source:`Extra metal — Bag ${bagId}`,
+          date:now(),
+          notes:`Extra ${fmtW(approvedQty)} ${demand.purity} ${demand.metalType} issued to karigar for ${demand.note||"repair"} — approved by CO/Admin`,
+        });
+        if(!prev.pmBook) prev.pmBook=[];
+        const pmEntry = {
+          id:generateId(), type:"DEPT_ISSUE", direction:"OUT",
+          bagNo:bagId, purity:demand.purity, metalType:demand.metalType,
+          weight:approvedQty, pureEquiv,
+          date:now(),
+          notes:`Extra metal issued to karigar — Bag ${bagId} — ${demand.note||"repair"} — approved by CO/Admin`,
+          isExtraMetal:true,
+        };
+        prev.pmBook.push(pmEntry);
+        pmBookEntryId = pmEntry.id;
+        prev.auditLogs.push({ id:generateId(), action:"EXTRA_METAL_ISSUED", entityId:bagId, details:`Extra ${fmtW(approvedQty)} ${demand.purity} ${demand.metalType} issued to ${(prev.karigars||[]).find(k=>k.id===demand.karigarId)?.name||"karigar"} — ${demand.note||"repair"} — approved by CO/Admin`, timestamp:now() });
+      }
+
+      d.status = "ISSUED";
+      d.approvedQuantity = approvedQty;
+      d.coActionBy = user?.role||"co";
+      d.coActionAt = now();
+      d.coNote = f.note || null;
+      d.issuedBy = user?.name || "CO_USER";
+      d.issuedAt = now();
+      d.pmBookEntryId = pmBookEntryId;
+      return prev;
+    });
+    setDemandForms(prev=>{ const np={...prev}; delete np[demandId]; return np; });
+  };
+
+  const handleRejectDemand = (demandId) => {
+    const demand = (db.demands||[]).find(d=>d.id===demandId);
+    if(!demand) return;
+    const f = demandForms[demandId] || {};
+    if(!window.confirm(`Reject ${demand.demandType==="NEW_BAG"?"new bag":"extra metal"} request — Bag ${demand.bagNo}?\n\nRequested by: ${demand.raisedBy}\n${fmtW(demand.quantityRequested)} ${demand.purity} ${demand.metalType}`)) return;
+
+    updateDB(prev=>{
+      const d = (prev.demands||[]).find(x=>x.id===demandId);
+      if(!d || d.status!=="PENDING") return prev;
+      d.status = "REJECTED";
+      d.coActionBy = user?.role||"co";
+      d.coActionAt = now();
+      d.coNote = f.note || "Rejected";
+      if(demand.demandType==="NEW_BAG") {
+        const bag = prev.bags.find(b=>b.id===demand.bagId);
+        if(bag) {
+          bag.status = "Cancelled";
+          d.coNote = d.coNote || "Bag cancelled";
+          prev.auditLogs.push({ id:generateId(), action:"BAG_REQUEST_REJECTED", entityId:bag.id, details:`Bag ${bag.id} request rejected by CO/Admin — bag marked Cancelled. ${f.note||""}`, timestamp:now() });
+        }
+      } else {
+        prev.auditLogs.push({ id:generateId(), action:"EXTRA_METAL_REJECTED", entityId:demand.bagId, details:`Extra metal request for Bag ${demand.bagNo} rejected by CO/Admin. ${f.note||""}`, timestamp:now() });
+      }
+      return prev;
+    });
+    setDemandForms(prev=>{ const np={...prev}; delete np[demandId]; return np; });
+  };
 
   // Live production stats
   const activeBags = db.bags.filter(b=>b.status==="In Process");
@@ -3984,6 +4281,8 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
       <div className="tab-bar" style={{ flexWrap:"wrap" }}>
         {[
           { id:"production",    label:"⊞ Production Board" },
+          { id:"demands_pending", label:`⏳ Pending Approval${(db.demands||[]).filter(d=>d.status==="PENDING").length>0?` (${(db.demands||[]).filter(d=>d.status==="PENDING").length})`:""}` },
+          { id:"demands_history", label:"✓ Last Approved" },
           { id:"receive",       label:"↓ Receive Jewellery" },
           { id:"recv_metal",    label:"↩ Receive Metal" },
           { id:"account",       label:"▣ Metal Account" },
@@ -3992,7 +4291,7 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
           { id:"readystock",    label:"🏷 Ready Stock" },
           { id:"rsledger",      label:"📒 Ready Stock Ledger" },
         ].map(t=>(
-          <button key={t.id} className={`btn ${coTab===t.id?"btn-gold":""}`} onClick={()=>setCoTab(t.id)}>{t.label}</button>
+          <button key={t.id} className={`btn ${coTab===t.id?"btn-gold":""}`} style={t.id==="demands_pending"&&(db.demands||[]).filter(d=>d.status==="PENDING").length>0?{ borderColor:"#e0903a", color:coTab===t.id?"#0a0a0f":"#e0903a" }:undefined} onClick={()=>setCoTab(t.id)}>{t.label}</button>
         ))}
         {memoReceipt && (
           <button className={`btn ${coTab==="memo"?"btn-gold":""}`} style={{ borderColor:"#4db88a", color:coTab==="memo"?"#0a0a0f":"#4db88a" }} onClick={()=>setCoTab("memo")}>
@@ -4061,6 +4360,99 @@ function CentralOfficeView({ db, updateDB, setModal, dateRange, onShowDigest }) 
           </table>
         </div>
       )}
+
+      {/* PENDING APPROVAL — demands raised by non-CO/Admin roles awaiting CO action */}
+      {coTab==="demands_pending" && (() => {
+        const pending = (db.demands||[]).filter(d=>d.status==="PENDING").sort((a,b)=>new Date(a.raisedAt)-new Date(b.raisedAt));
+        return (
+          <div>
+            <div style={{ fontSize:"11px", color:"var(--text-dim)", marginBottom:"14px" }}>
+              Requests for new-bag metal or extra metal raised by non-CO/Admin users. The bag is blocked from further movement until each request is approved or rejected. You can adjust the quantity before approving.
+            </div>
+            {pending.length===0 && (
+              <div className="card card-gold" style={{ textAlign:"center", color:"var(--text-dim)", fontSize:"11px", letterSpacing:"1.5px", padding:"40px" }}>No requests pending approval</div>
+            )}
+            {pending.map(d=>{
+              const f = demandForms[d.id] || {};
+              const karigarName = d.karigarId ? (db.karigars||[]).find(k=>k.id===d.karigarId)?.name : null;
+              return (
+                <div key={d.id} className="card card-gold" style={{ marginBottom:"12px" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:"8px" }}>
+                    <div>
+                      <span className={`badge ${d.demandType==="NEW_BAG"?"badge-blue":"badge-orange"}`}>{d.demandType==="NEW_BAG"?"New Bag":"Extra Metal"}</span>
+                      <strong style={{ marginLeft:"8px", color:"var(--gold)" }}>Bag {d.bagNo}</strong>
+                      {d.dept && <span style={{ marginLeft:"8px", fontSize:"11px", color:"var(--text-dim)" }}>{d.dept}{karigarName?` → ${karigarName}`:""}</span>}
+                    </div>
+                    <div style={{ fontSize:"10px", color:"var(--text-dim)", textAlign:"right" }}>
+                      Requested by <strong style={{ color:"var(--gold-dim)" }}>{d.raisedBy}</strong><br/>
+                      {new Date(d.raisedAt).toLocaleString("en-IN")}
+                    </div>
+                  </div>
+                  <div style={{ fontSize:"12px", color:"var(--text-secondary)", marginBottom:"10px" }}>{d.note}</div>
+                  <div style={{ display:"flex", gap:"12px", alignItems:"flex-end", flexWrap:"wrap" }}>
+                    <div>
+                      <label style={{ fontSize:"10px", color:"var(--text-dim)" }}>Requested</label>
+                      <div style={{ fontFamily:"'Courier New',monospace", fontSize:"14px", color:"var(--gold-light)" }}>{fmtW(d.quantityRequested)} {d.purity} {d.metalType}</div>
+                    </div>
+                    <div>
+                      <label style={{ fontSize:"10px", color:"var(--text-dim)" }}>Approved Qty (g)</label>
+                      <input type="number" step="0.001" style={{ width:"110px" }}
+                        placeholder={fmtW(d.quantityRequested)}
+                        value={f.qty!=null?f.qty:""}
+                        onChange={e=>setDemandForms(prev=>({ ...prev, [d.id]:{ ...prev[d.id], qty:e.target.value } }))}/>
+                    </div>
+                    <div style={{ flex:1, minWidth:"180px" }}>
+                      <label style={{ fontSize:"10px", color:"var(--text-dim)" }}>CO Note (optional)</label>
+                      <input type="text" placeholder="Note for the audit trail"
+                        value={f.note||""}
+                        onChange={e=>setDemandForms(prev=>({ ...prev, [d.id]:{ ...prev[d.id], note:e.target.value } }))}/>
+                    </div>
+                    <button className="btn btn-green" onClick={()=>handleApproveDemand(d.id)}>✓ Approve &amp; Issue</button>
+                    <button className="btn btn-red" onClick={()=>handleRejectDemand(d.id)}>✗ Reject</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {/* LAST APPROVED — history of CO actions on demands */}
+      {coTab==="demands_history" && (() => {
+        const resolved = (db.demands||[]).filter(d=>d.status!=="PENDING").sort((a,b)=>new Date(b.coActionAt||b.raisedAt)-new Date(a.coActionAt||a.raisedAt));
+        return (
+          <div>
+            {resolved.length===0 && (
+              <div className="card card-gold" style={{ textAlign:"center", color:"var(--text-dim)", fontSize:"11px", letterSpacing:"1.5px", padding:"40px" }}>No approvals yet</div>
+            )}
+            {resolved.length>0 && (
+              <div className="card card-gold" style={{ padding:0, overflow:"hidden" }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Bag</th><th>Type</th><th>Requested By</th><th>Requested</th><th>Approved</th><th>Status</th><th>CO Action</th><th>Note</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resolved.map(d=>(
+                      <tr key={d.id}>
+                        <td style={{ color:"var(--gold)" }}>{d.bagNo}</td>
+                        <td>{d.demandType==="NEW_BAG"?"New Bag":"Extra Metal"}</td>
+                        <td>{d.raisedBy}</td>
+                        <td style={{ fontFamily:"'Courier New',monospace" }}>{fmtW(d.quantityRequested)} {d.purity} {d.metalType}</td>
+                        <td style={{ fontFamily:"'Courier New',monospace", color:"var(--gold-light)" }}>{d.approvedQuantity!=null?fmtW(d.approvedQuantity):"—"}</td>
+                        <td><span className={`badge ${d.status==="ISSUED"?"badge-green":"badge-red"}`}>{d.status}</span></td>
+                        <td style={{ fontSize:"10px", color:"var(--text-dim)" }}>{d.coActionAt?new Date(d.coActionAt).toLocaleString("en-IN"):"—"}</td>
+                        <td style={{ fontSize:"11px", color:"var(--text-secondary)" }}>{d.coNote||"—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* RECEIVE JEWELLERY */}
       {coTab==="receive" && (
@@ -6641,6 +7033,9 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId,
     }
     updateDB(prev=>{
       if(!manualBagOverride) prev.bagCounters[key] = next;
+      const isCOorAdminBC = user?.role==="co" || user?.role==="admin";
+      const issuedWt = parseFloat(form.issuedWeight);
+      const pureEquiv = toPureMetal(issuedWt, form.purity);
       // Update itemCounter
       const bag = {
         id: bagNo, designId: form.designId,
@@ -6653,9 +7048,12 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId,
         issuedWeight: round3(form.issuedWeight),
         currentWeight: round3(form.issuedWeight),
         currentDept: PROD_MGR,          // CO issues to PM — PM holds until issued to first dept
-        status: "In Process", createdAt: now(),
+        // Non-CO/Admin: bag is created but metal is NOT issued until CO/Admin approves
+        // the demand below — status stays "Pending Approval" and the bag cannot be
+        // moved (it won't appear in Bag Movement's in-process list) until then.
+        status: isCOorAdminBC ? "In Process" : "Pending Approval", createdAt: now(),
         notes: form.notes, isBroken: false,
-        pendingIssue: true,             // ready for PM to issue to first dept
+        pendingIssue: isCOorAdminBC,     // ready for PM to issue to first dept (once approved)
         needsMetalFlag:  false,         // PM can flag bag needs metal from CO
         needsStonesFlag: false,         // PM can flag bag needs stones from CO
         currentKarigarId: null,
@@ -6676,44 +7074,59 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId,
         }
       }
 
-      const issuedWt = parseFloat(form.issuedWeight);
-      const pureEquiv = toPureMetal(issuedWt, form.purity);
-      prev.transactions.push({
-        id:generateId(), type:"INITIAL_ISSUE", bagNo, groupLabel:null,
-        fromDept:CENTRAL_OFFICE, toDept:PROD_MGR,
-        issuedWeight:issuedWt, receivedWeight:null, lossWeight:null, recoveryWeight:0,
-        purity:form.purity, metalType:form.metalType, karigarId:null, timestamp:now(),
-        notes:"Bag created by Central Office — handed to Production Manager"
-      });
-      // Debit CO Alloyed Stock — bag issued to PM
-      if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
-      prev.coAlloyedStock.push({
-        id:generateId(), type:"BAG_ISSUE", direction:"OUT",
-        metalType:form.metalType, purity:form.purity,
-        weight:issuedWt, pureEquiv:pureEquiv,
-        bagNo, source:`Bag ${bagNo} issued to PM`, date:now(),
-        notes:`${issuedWt}g ${form.purity} ${form.metalType} issued to PM for bag ${bagNo}`,
-      });
-      // pureMetalStock NOT debited here — bags are made from alloyed metal (post-casting), not pure metal directly.
-      // PM Ledger entry — CO → PM
-      if(!prev.pmLedger) prev.pmLedger=[];
-      prev.pmLedger.push({
-        id:generateId(), type:"RECEIVED_FROM_CO",
-        bagNo, purity:form.purity, metalType:form.metalType,
-        alloiedWeight:issuedWt, pureWeight:pureEquiv,
-        date:now(), notes:`Received from Central Office for bag ${bagNo}`,
-        reconciled:false,
-      });
-      // PM Book entry — bag received from CO
-      if(!prev.pmBook) prev.pmBook=[];
-      prev.pmBook.push({
-        id:generateId(), type:"BAG_RECEIVED_FROM_CO", direction:"IN",
-        bagNo, purity:form.purity, metalType:form.metalType,
-        weight:issuedWt, pureEquiv,
-        date:now(),
-        notes:`Bag ${bagNo} issued from CO — ${issuedWt}g ${form.purity} ${form.metalType}`,
-      });
-      prev.auditLogs.push({ id:generateId(), action:"BAG_CREATED", entityId:bagNo, details:`${bagNo} — ${form.unitCount} units × ${form.partsPerUnit} parts = ${totalParts} parts total`, timestamp:now() });
+      if(isCOorAdminBC) {
+        prev.transactions.push({
+          id:generateId(), type:"INITIAL_ISSUE", bagNo, groupLabel:null,
+          fromDept:CENTRAL_OFFICE, toDept:PROD_MGR,
+          issuedWeight:issuedWt, receivedWeight:null, lossWeight:null, recoveryWeight:0,
+          purity:form.purity, metalType:form.metalType, karigarId:null, timestamp:now(),
+          notes:"Bag created by Central Office — handed to Production Manager"
+        });
+        // Debit CO Alloyed Stock — bag issued to PM
+        if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
+        prev.coAlloyedStock.push({
+          id:generateId(), type:"BAG_ISSUE", direction:"OUT",
+          metalType:form.metalType, purity:form.purity,
+          weight:issuedWt, pureEquiv:pureEquiv,
+          bagNo, source:`Bag ${bagNo} issued to PM`, date:now(),
+          notes:`${issuedWt}g ${form.purity} ${form.metalType} issued to PM for bag ${bagNo}`,
+        });
+        // pureMetalStock NOT debited here — bags are made from alloyed metal (post-casting), not pure metal directly.
+        // PM Ledger entry — CO → PM
+        if(!prev.pmLedger) prev.pmLedger=[];
+        prev.pmLedger.push({
+          id:generateId(), type:"RECEIVED_FROM_CO",
+          bagNo, purity:form.purity, metalType:form.metalType,
+          alloiedWeight:issuedWt, pureWeight:pureEquiv,
+          date:now(), notes:`Received from Central Office for bag ${bagNo}`,
+          reconciled:false,
+        });
+        // PM Book entry — bag received from CO
+        if(!prev.pmBook) prev.pmBook=[];
+        prev.pmBook.push({
+          id:generateId(), type:"BAG_RECEIVED_FROM_CO", direction:"IN",
+          bagNo, purity:form.purity, metalType:form.metalType,
+          weight:issuedWt, pureEquiv,
+          date:now(),
+          notes:`Bag ${bagNo} issued from CO — ${issuedWt}g ${form.purity} ${form.metalType}`,
+        });
+        prev.auditLogs.push({ id:generateId(), action:"BAG_CREATED", entityId:bagNo, details:`${bagNo} — ${form.unitCount} units × ${form.partsPerUnit} parts = ${totalParts} parts total`, timestamp:now() });
+      } else {
+        // Not CO/Admin — raise a demand. No metal issued, bag stays "Pending Approval"
+        // until CO/Admin approves (Central Office → ⏳ Pending Approval).
+        if(!prev.demands) prev.demands=[];
+        prev.demands.push({
+          id:generateId(), type:"METAL", demandType:"NEW_BAG",
+          bagId:bagNo, bagNo, dept:PROD_MGR, karigarId:null,
+          raisedBy: user?.name || user?.role || "Unknown",
+          raisedAt: now(),
+          metalType:form.metalType, purity:form.purity,
+          quantityRequested: issuedWt,
+          note: form.notes || `New bag ${bagNo} — initial metal request`,
+          status:"PENDING",
+        });
+        prev.auditLogs.push({ id:generateId(), action:"BAG_CREATED_PENDING_APPROVAL", entityId:bagNo, details:`${bagNo} — ${form.unitCount} units × ${form.partsPerUnit} parts = ${totalParts} parts total — awaiting CO/Admin approval of ${fmtW(issuedWt)} ${form.purity} ${form.metalType}`, timestamp:now() });
+      }
       // Write-back last usage onto design record
       const dIdx = (prev.designs||[]).findIndex(d => d.id === form.designId);
       if(dIdx !== -1) {
@@ -6744,7 +7157,7 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId,
   const allPurities  = ["All",...new Set((db.bags||[]).map(b=>b.purity).filter(Boolean))];
   const allMetals    = ["All",...new Set((db.bags||[]).map(b=>b.metalType).filter(Boolean))];
   const allCategories= ["All",...new Set((db.bags||[]).map(b=>b.categoryLabel).filter(Boolean))];
-  const allStatuses  = ["All","In Process","Completed","Returned Mid-Process","Cancelled"];
+  const allStatuses  = ["All","Pending Approval","In Process","Completed","Returned Mid-Process","Cancelled"];
   const allDepts     = ["All",...new Set((db.bags||[]).map(b=>b.currentDept).filter(Boolean))];
 
   const filtered = (db.bags||[]).filter(b=> {
@@ -6913,6 +7326,11 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId,
       {showCreate && (
         <div className="card card-gold fade-in" style={{ marginBottom:"16px" }}>
           <div className="modal-title">Create New Bag</div>
+          {!(user?.role==="co"||user?.role==="admin") && (
+            <div style={{ background:"rgba(212,168,67,0.08)", border:"1px solid rgba(212,168,67,0.3)", borderRadius:"2px", padding:"8px 12px", marginBottom:"12px", fontSize:"11px", color:"var(--gold-dim)" }}>
+              ⏳ The bag will be created, but its metal request needs CO/Admin approval before it can be issued to a department (Central Office → Pending Approval).
+            </div>
+          )}
           <div className="form-grid">
             <div className="form-group">
               <div className="label">Metal Type</div>
@@ -7202,7 +7620,7 @@ function BagsView({ db, updateDB, setModal, user, goToBagMovement, initialBagId,
                       </span>
                     ) : <span style={{ color:"var(--gold-dim)" }}>—</span>}
                   </td>
-                  <td><span className={`badge ${bag.status==="In Process"?"badge-blue":bag.status==="Completed"?"badge-green":"badge-red"}`}>{bag.status}</span></td>
+                  <td><span className={`badge ${bag.status==="Pending Approval"?"badge-orange":bag.status==="In Process"?"badge-blue":bag.status==="Completed"?"badge-green":"badge-red"}`}>{bag.status}</span></td>
                   <td>
                     <div style={{ display:"flex", gap:"4px" }}>
                       <button className="btn btn-sm btn-green" onClick={()=>setModal({ type:"bagDetail", bagId:bag.id })}>View</button>
@@ -9656,6 +10074,11 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
   const handleQCPass = () => {
     updateDB(prev=>{
       const b = prev.bags.find(x=>x.id===selectedBagId);
+      // Guard against double-click / re-submission — if this bag already has a
+      // COMPLETED_BAG entry in PM Book (Ready for CO or already Delivered), don't
+      // create a second one. This previously caused duplicate Alloyed Stock credits.
+      const alreadyQCPassed = (prev.pmBook||[]).some(e=>e.bagNo===selectedBagId && e.type==="COMPLETED_BAG");
+      if(alreadyQCPassed || b?.qcPassedAt) return prev;
       if(b){
         b.currentDept  = PROD_MGR;  // back to PM after QC pass — PM does soft delivery to CO
         b.qcPassedAt   = now();
@@ -9686,6 +10109,7 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
       }
     }, 200);
   };
+
 
   const handleQCFail = () => {
     if(!qcFailForm.reason) return showToast("Enter reason for failure");
@@ -9732,9 +10156,43 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
     if(!extraMetalForm.weight || parseFloat(extraMetalForm.weight)<=0) return showToast("Enter a valid weight");
     if(!extraMetalForm.karigarId) return showToast("Select the karigar receiving this extra metal");
     const bagObj = entity==="bag" ? bag : db.bags.find(b=>b.id===group?.bagId);
+    const isCOorAdminEM = user?.role==="co" || user?.role==="admin";
+    const wt = parseFloat(extraMetalForm.weight);
+
+    if(!isCOorAdminEM) {
+      // Already has a pending demand for this bag? Don't allow another.
+      if((db.demands||[]).some(d=>d.bagId===(selectedBagId||group?.bagId) && d.status==="PENDING")) {
+        return showToast(`Bag ${selectedBagId||group?.bagId} already has a request pending CO/Admin approval.`, 'error');
+      }
+      // Not CO/Admin — raise a demand instead of issuing directly. No metal moves,
+      // and the bag is blocked from further movement until CO/Admin approves or
+      // rejects it (Central Office → ⏳ Pending Approval).
+      updateDB(prev=>{
+        if(!prev.demands) prev.demands=[];
+        prev.demands.push({
+          id:generateId(), type:"METAL", demandType:"EXTRA_METAL",
+          bagId:selectedBagId||group?.bagId, bagNo:selectedBagId||group?.bagId,
+          dept:bagObj?.currentDept||null, karigarId:extraMetalForm.karigarId,
+          groupLabel: entity==="group"?group?.label:null,
+          raisedBy: user?.name || user?.role || "Unknown",
+          raisedAt: now(),
+          metalType:bagObj?.metalType, purity:bagObj?.purity,
+          quantityRequested: wt,
+          note: extraMetalForm.reason || "Repair / Welding / Soldering",
+          status:"PENDING",
+        });
+        if(!prev.auditLogs) prev.auditLogs=[];
+        prev.auditLogs.push({ id:generateId(), action:"EXTRA_METAL_REQUESTED", entityId:selectedBagId||group?.bagId,
+          details:`Extra metal request — ${fmtW(wt)} ${bagObj?.purity} ${bagObj?.metalType} for ${prev.karigars.find(k=>k.id===extraMetalForm.karigarId)?.name} — ${extraMetalForm.reason||"repair"} — awaiting CO/Admin approval`, timestamp:now() });
+        return prev;
+      });
+      setExtraMetalForm({ weight:"", reason:"", karigarId:"" });
+      showToast('⏳ Extra metal request sent for CO/Admin approval. This bag is blocked until it is approved or rejected.', 'success');
+      return;
+    }
+
     updateDB(prev=>{
       if(!prev.extraMetalIssues) prev.extraMetalIssues=[];
-      const wt = parseFloat(extraMetalForm.weight);
       prev.extraMetalIssues.push({
         id: generateId(),
         bagId: selectedBagId||group?.bagId,
@@ -10197,10 +10655,61 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
       ? (hasSettingStones ? (bag?.netMetalWeight||bag?.currentWeight||0) : (bag?.currentWeight||0))
       : (group?.currentWeight||0);
 
+    // Guard: a pending demand (extra metal request) blocks this bag from moving
+    // until CO/Admin approves or rejects it — Central Office → ⏳ Pending Approval.
+    const pendingDemand = (db.demands||[]).find(d=>d.bagId===bagObj?.id && d.status==="PENDING");
+    if(pendingDemand) {
+      showToast(`Bag ${bagObj.id} has a pending ${pendingDemand.demandType==="EXTRA_METAL"?"extra metal":""} request (${fmtW(pendingDemand.quantityRequested)} ${pendingDemand.purity} ${pendingDemand.metalType}) awaiting CO/Admin approval — cannot move until it is approved or rejected.`, 'error');
+      return;
+    }
+
+    // Guard: a bag already marked "Completed" (received by CO) should not move
+    // further — its weight is already counted in CO's Alloyed Metal Stock, so
+    // sending it back to a karigar without correcting that would overstate stock
+    // (this is exactly what happened with Bag BGS-CH1). For rework, creating a
+    // NEW bag is the recommended approach. If the user insists on reopening this
+    // SAME bag, recall its weight from Alloyed Stock and reopen it as "In Process".
+    // Only CO/Admin can authorize this — they own the Alloyed Stock ledger.
+    if(bagObj?.status==="Completed") {
+      if(!(user?.role==="co" || user?.role==="admin")) {
+        showToast(`Bag ${bagObj.id} is COMPLETED. Only CO or Admin can reopen a completed bag for rework.`, 'error');
+        return;
+      }
+      const recallWt = bagObj.netMetalWeight || bagObj.currentWeight || 0;
+      const proceed = window.confirm(
+        `⚠ Bag ${bagObj.id} is already marked COMPLETED — it was received by CO and its `+
+        `${fmtW(recallWt)} ${bagObj.purity} ${bagObj.metalType} is currently counted in CO's Alloyed Metal Stock.\n\n`+
+        `RECOMMENDED: don't move this bag again — create a NEW bag for rework instead.\n\n`+
+        `If you proceed anyway, this bag will be RECALLED from CO — ${fmtW(recallWt)} ${bagObj.purity} `+
+        `${bagObj.metalType} will be debited from Alloyed Stock and the bag reopened as "In Process" — `+
+        `before being issued to ${issueForm.toDept}.\n\n`+
+        `OK = Recall & proceed   Cancel = Don't move this bag`
+      );
+      if(!proceed) return;
+    }
+
     updateDB(prev=>{
       if(entity==="bag"){
         const b = prev.bags.find(x=>x.id===selectedBagId);
         if(!b) return prev;
+        // Recall from CO if this bag was already Completed (see guard above)
+        if(b.status==="Completed") {
+          const recallWt = b.netMetalWeight || b.currentWeight || 0;
+          if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
+          prev.coAlloyedStock.push({
+            id:generateId(), type:"RECALL_FOR_REWORK", direction:"OUT",
+            metalType:b.metalType, purity:b.purity,
+            weight:recallWt, pureEquiv:toPureMetal(recallWt, b.purity),
+            bagNo:b.id,
+            source:`Recall — Bag ${b.id} reopened for rework`,
+            date:now(),
+            notes:`Bag ${b.id} (${fmtW(recallWt)} ${b.purity} ${b.metalType}) recalled from Alloyed Stock — reopened for rework and issued to ${issueForm.toDept}.`,
+          });
+          b.status = "In Process";
+          if(!prev.auditLogs) prev.auditLogs=[];
+          prev.auditLogs.push({ id:generateId(), action:"BAG_RECALLED_FOR_REWORK", entityId:b.id,
+            details:`Bag ${b.id} recalled from CO Alloyed Stock (-${fmtW(recallWt)} ${b.purity} ${b.metalType}) and reopened as "In Process" for rework.`, timestamp:now() });
+        }
         const fromDept = b.currentDept;
         b.currentDept = issueForm.toDept;
         b.currentKarigarId = issueForm.karigarId;
@@ -10226,6 +10735,24 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
         if(!g) return prev;
         const fromDept = g.currentDept;
         const parentBag = prev.bags.find(b=>b.id===g.bagId);
+        // Recall from CO if the parent bag was already Completed (see guard above)
+        if(parentBag?.status==="Completed") {
+          const recallWt = parentBag.netMetalWeight || parentBag.currentWeight || 0;
+          if(!prev.coAlloyedStock) prev.coAlloyedStock=[];
+          prev.coAlloyedStock.push({
+            id:generateId(), type:"RECALL_FOR_REWORK", direction:"OUT",
+            metalType:parentBag.metalType, purity:parentBag.purity,
+            weight:recallWt, pureEquiv:toPureMetal(recallWt, parentBag.purity),
+            bagNo:parentBag.id,
+            source:`Recall — Bag ${parentBag.id} reopened for rework`,
+            date:now(),
+            notes:`Bag ${parentBag.id} (${fmtW(recallWt)} ${parentBag.purity} ${parentBag.metalType}) recalled from Alloyed Stock — reopened for rework and issued to ${issueForm.toDept}.`,
+          });
+          parentBag.status = "In Process";
+          if(!prev.auditLogs) prev.auditLogs=[];
+          prev.auditLogs.push({ id:generateId(), action:"BAG_RECALLED_FOR_REWORK", entityId:parentBag.id,
+            details:`Bag ${parentBag.id} recalled from CO Alloyed Stock (-${fmtW(recallWt)} ${parentBag.purity} ${parentBag.metalType}) and reopened as "In Process" for rework.`, timestamp:now() });
+        }
         g.currentDept = issueForm.toDept;
         g.currentKarigarId = issueForm.karigarId;
         g.pendingIssue = false;
@@ -10567,6 +11094,12 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
     b.status==="In Process" &&
     !(b.qcPassedAt && b.pmBookDeliveredToCO)  // exclude: QC passed + delivered to CO
   );
+  // Completed bags — not normally actionable here, but selectable for REWORK.
+  // Selecting one and choosing "Issue to Department" will trigger the recall
+  // confirmation (debits Alloyed Stock, reopens the bag) before proceeding.
+  // Only CO/Admin can do this — they're the ones who own the Alloyed Stock ledger.
+  const isCOorAdminMV = user?.role==="co" || user?.role==="admin";
+  const completedBagsForRework = isCOorAdminMV ? db.bags.filter(b=>b.status==="Completed") : [];
   const inProcessGroups = db.groups.filter(g=>g.status==="In Process");
   const pendingPMDeliveries = (db.pmMetalDeliveries||[]).filter(d=>d.status==="Pending CO Receipt");
 
@@ -10625,10 +11158,16 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
                 onChange={v=>{ setSelectedBagId(v); setMode("receive"); }}
                 placeholder="— Select Bag — (type to search)"
                 emptyLabel="— Select Bag —"
-                options={inProcessBags.map(b=>({
-                  value: b.id,
-                  label: `${b.id} · ${b.designId||"—"} ${b.isBroken?"[SPLIT — "+((db.groups||[]).filter(g=>g.bagId===b.id&&g.status!=="Completed").length)+" groups]":"| "+b.currentDept+" | "+fmtW(b.currentWeight)}`,
-                }))}
+                options={[
+                  ...inProcessBags.map(b=>({
+                    value: b.id,
+                    label: `${b.id} · ${b.designId||"—"} ${b.isBroken?"[SPLIT — "+((db.groups||[]).filter(g=>g.bagId===b.id&&g.status!=="Completed").length)+" groups]":"| "+b.currentDept+" | "+fmtW(b.currentWeight)}`,
+                  })),
+                  ...completedBagsForRework.map(b=>({
+                    value: b.id,
+                    label: `✓ ${b.id} · ${b.designId||"—"} — COMPLETED (select only for rework)`,
+                  })),
+                ]}
               />
             ):(
               <SearchableSelect
@@ -11433,6 +11972,11 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
           {((entity==="bag"&&bag)||(entity==="group"&&group)) && mode==="extrametal" && (
             <div className="card card-gold fade-in" style={{ border:"1px solid #704010" }}>
               <div className="modal-title" style={{ color:"#e0903a" }}>+ Extra Metal Issuance</div>
+              {!(user?.role==="co"||user?.role==="admin") && (
+                <div style={{ background:"rgba(212,168,67,0.08)", border:"1px solid rgba(212,168,67,0.3)", borderRadius:"2px", padding:"8px 12px", marginBottom:"12px", fontSize:"11px", color:"var(--gold-dim)" }}>
+                  ⏳ This request will need CO/Admin approval before the metal is issued. The bag will be blocked from further movement until it's approved or rejected.
+                </div>
+              )}
               <div className="info-box" style={{ background:"#1a1000", borderColor:"#704010" }}>
                 Issue additional metal to karigar for <strong style={{ color:"#e0903a" }}>{selectedBagId||group?.bagId}</strong><br/>
                 Purity: <strong style={{ color:"var(--gold)" }}>{entity==="bag"?bag?.purity:db.bags.find(b=>b.id===group?.bagId)?.purity}</strong> &nbsp;
@@ -11476,7 +12020,7 @@ function MovementView({ db, updateDB, user, initialBagId, onInitialBagConsumed }
               </div>
               <div style={{ display:"flex", gap:"8px", alignItems:"center" }}>
                 <button className="btn" style={{ background:"#704010", color:"#f0c96a", border:"1px solid #e0903a" }} onClick={handleExtraMetal}>
-                  + Issue Extra Metal to Karigar
+                  {(user?.role==="co"||user?.role==="admin") ? "+ Issue Extra Metal to Karigar" : "⏳ Send for CO/Admin Approval"}
                 </button>
                 <button className="btn btn-sm" onClick={()=>setMode("receive")}>✕ Close</button>
               </div>
@@ -17894,7 +18438,7 @@ function ReportsView({ db, setModal, user, dateRange }) {
     karigars:   [{id:"list",label:"Karigar Report"},{id:"monthly",label:"Monthly"}],
     bags:       [{id:"summary",label:"Bag Summary"},{id:"detail",label:"Bag Detail"}],
     metalstock: [{id:"reconcile",label:"Reconciliation"},{id:"alloyed",label:"Alloyed by Purity"}],
-    karigarbal: [{id:"withkarigars",label:"With Karigars"},{id:"withpm",label:"With PM"},{id:"losshistory",label:"Loss History"}],
+    karigarbal: [{id:"withkarigars",label:"With Karigars"},{id:"withpm",label:"With PM"}],
   };
 
   const setReportTab = id => {
@@ -18600,65 +19144,6 @@ function ReportsView({ db, setModal, user, dateRange }) {
                       )}
                     </div>
                   ))
-              }
-            </div>
-          );
-        })()}
-
-        {/* ════ KARIGAR / PM METAL BALANCE — LOSS HISTORY ════ */}
-        {report==="karigarbal" && subView==="losshistory" && (()=>{
-          // Cumulative loss ("Machine Dust") attributed per karigar per purity, over the
-          // selected date range — for spotting karigars with consistently high loss%
-          // (a possible sign that small shreds/wires are staying with them rather than
-          // returning to PM or going into the machine).
-          const closedTxs = filteredTxs.filter(t=>t.receivedWeight!=null && t.karigarId);
-          const byKarigar = {};
-          closedTxs.forEach(t=>{
-            const k = db.karigars.find(x=>x.id===t.karigarId);
-            const kName = k?.name || "Unknown";
-            const pKey = `${t.purity}||${t.metalType||"Gold"}`;
-            if(!byKarigar[t.karigarId]) byKarigar[t.karigarId] = { name:kName, byPurity:{} };
-            if(!byKarigar[t.karigarId].byPurity[pKey]) byKarigar[t.karigarId].byPurity[pKey] = { purity:t.purity, metalType:t.metalType||"Gold", issued:0, received:0, returned:0, loss:0 };
-            const p = byKarigar[t.karigarId].byPurity[pKey];
-            p.issued   += t.issuedWeight||0;
-            p.received += t.receivedWeight||0;
-            p.returned += (t.recoveryWeight||0) + (t.looseMetalWeight||0);
-            p.loss     += t.lossWeight||0;
-          });
-          const rows = [];
-          Object.values(byKarigar).forEach(k=>{
-            Object.values(k.byPurity).forEach(p=>{
-              rows.push({ name:k.name, ...p });
-            });
-          });
-          rows.sort((a,b)=>b.loss-a.loss);
-          return (
-            <div className="card card-gold">
-              <div className="section-title"><span className="section-title-accent"></span>Loss ("Machine Dust") Attributed Per Karigar</div>
-              <div style={{ fontSize:"11px", color:"var(--text-dim)", marginBottom:"12px", lineHeight:"1.8" }}>
-                "Returned (Extra/Loose)" is metal the karigar handed back separately from the piece itself —
-                both reduce "Loss" already. Loss % consistently higher for one karigar than others on the same
-                purity/category is the practical signal that small shreds/wires may be staying with that karigar
-                rather than going into the machine or coming back to PM.
-              </div>
-              {rows.length===0
-                ? <div style={{ color:"var(--text-dim)", fontSize:"11px", padding:"12px 0" }}>No completed receipts in this date range{filterKarigar||filterPurity||filterMetal?" matching these filters":""}.</div>
-                : <table>
-                    <thead><tr><th>Karigar</th><th>Purity</th><th className="num">Issued (g)</th><th className="num">Received (g)</th><th className="num">Returned Extra/Loose (g)</th><th className="num">Loss (g)</th><th className="num">Loss %</th></tr></thead>
-                    <tbody>
-                      {rows.map((r,i)=>(
-                        <tr key={i}>
-                          <td style={{ color:"var(--gold)" }}>{r.name}</td>
-                          <td><span className="badge badge-blue" style={{ fontSize:"9px" }}>{r.purity} {r.metalType}</span></td>
-                          <td className="num weight-text">{fmtW(r.issued)}</td>
-                          <td className="num">{fmtW(r.received)}</td>
-                          <td className="num recovery-text">{r.returned>0?fmtW(r.returned):"—"}</td>
-                          <td className="num loss-text">{fmtW(r.loss)}</td>
-                          <td className="num"><span style={{ color:r.issued>0&&(r.loss/r.issued)>0.03?"var(--loss)":"var(--recovery)" }}>{r.issued>0?((r.loss/r.issued)*100).toFixed(2):0}%</span></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
               }
             </div>
           );

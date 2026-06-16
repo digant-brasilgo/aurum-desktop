@@ -47,6 +47,7 @@
       "backup.js",
       "server.js",
       "package.json",
+      "assets/**/*",
       "node_modules/**/*",
       "!node_modules/.cache/**/*"
     ],

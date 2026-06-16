@@ -3,13 +3,56 @@ const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
 
+// ── Single-instance lock ────────────────────────────────────────
+// Prevents AUD from ever running twice at once on the same PC. If a second
+// launch is attempted (double-click, stuck shortcut, etc.) while one is
+// already running, Electron tells the FIRST instance via 'second-instance'
+// and we just bring its window to front instead of starting a brand new
+// app (which used to spawn a whole second set of processes AND a second
+// print agent — causing the port 3739 EADDRINUSE pile-up and the stale-
+// session 401s on /api/data).
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  // Another instance is already running — quit this new one immediately.
+  app.quit();
+  process.exit(0);
+}
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+  }
+});
+
 // ── Print Agent auto-start ─────────────────────────────────────
 let printAgentProcess = null;
 const PRINT_AGENT_PATH = 'D:\\Aurum\\aurum-print\\aurum-print-agent.js';
 
-function startPrintAgent() {
+// Checks if something is already listening on the print agent's port (3739).
+// Used before spawning, so we never blindly start a second copy on top of
+// one that's already running (e.g. left over from a previous AUD instance
+// that didn't fully exit) — that previously caused repeated
+// "EADDRINUSE: address already in use 0.0.0.0:3739" errors in the log.
+function isPrintAgentAlreadyRunning() {
+  return new Promise((resolve) => {
+    const http = require('http');
+    const options = { hostname:'localhost', port:3739, path:'/status', method:'GET', timeout:1500 };
+    const probe = http.request(options, () => { resolve(true); });
+    probe.on('error', () => resolve(false));
+    probe.on('timeout', () => { probe.destroy(); resolve(false); });
+    probe.end();
+  });
+}
+
+async function startPrintAgent() {
   if (!fs.existsSync(PRINT_AGENT_PATH)) {
     console.log('[PrintAgent] Not found at', PRINT_AGENT_PATH, '— skipping');
+    return;
+  }
+  const alreadyRunning = await isPrintAgentAlreadyRunning();
+  if (alreadyRunning) {
+    console.log('[PrintAgent] Already running on port 3739 (likely from a previous AUD session) — not spawning a new copy.');
     return;
   }
   try {
@@ -38,7 +81,7 @@ function stopPrintAgent() {
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 
-let mainWindow, tray;
+let mainWindow, tray, appIcon;
 const userDataPath  = app.getPath('userData');
 const usersFile     = path.join(userDataPath, 'aurum-users.json');
 const settingsFile  = path.join(userDataPath, 'aurum-settings.json');
@@ -1416,8 +1459,8 @@ function createWindow() {
   const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
   const zoomFactor = Math.min(1.0, screenW / 1280);
 
-  const iconPath = path.join(__dirname, 'assets', 'icon.ico');
-  const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
+  const iconPath = path.join(__dirname, 'assets', 'aurum_icon.ico');
+  appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
   mainWindow = new BrowserWindow({
     width:1400, height:900, minWidth:1100, minHeight:700,
     title:'AURUM — Brasilgo Jewels Private Limited',
@@ -1456,7 +1499,12 @@ function createWindow() {
 }
 
 function createTray() {
-  tray = new Tray(appIcon);
+  try {
+    tray = new Tray(appIcon || nativeImage.createEmpty());
+  } catch(e) {
+    console.log('[Tray] Failed to create tray icon:', e.message);
+    return;
+  }
   tray.setToolTip('AURUM — Jewellery Metal Tracking');
   const updateTrayMenu = () => {
     const ip  = getLanIP();
@@ -1469,7 +1517,7 @@ function createTray() {
       { type:'separator' },
       { label:'Backup Now', click:()=>doBackup() },
       { type:'separator' },
-      { label:'Quit', click:()=>{ app.isQuitting=true; app.quit(); } },
+      { label:'Quit AURUM (stops LAN server too)', click:()=>{ app.isQuitting=true; app.quit(); } },
     ]));
   };
   updateTrayMenu();
